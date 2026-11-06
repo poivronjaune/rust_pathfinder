@@ -1,3 +1,11 @@
+pub(crate) const APP_NAME: &str = "Rust Pathfinder";
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const APP_DESCRIPTION: &str =
+    "A grid-based map and vehicle movement prototype.\nUse the arrow keys to move and turn the car, Esc to quit.";
+pub(crate) const APP_AUTHOR: &str = "poivronjaune";
+pub(crate) const APP_COPYRIGHT: &str = "Copyright (c) 2026 poivronjaune - MIT License";
+pub(crate) const APP_WEBSITE: &str = "https://github.com/poivronjaune/rust_pathfinder";
+
 pub(crate) const GRID_SIZE: usize = 20;
 pub(crate) const CELL_SIZE: usize = 20;
 pub(crate) const BORDER_WIDTH: usize = 1;
