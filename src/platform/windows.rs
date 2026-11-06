@@ -23,7 +23,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app::{AppState, VehicleKey};
-use crate::config::{HEIGHT, WIDTH};
+use crate::config::{
+    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
+};
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
@@ -224,7 +226,10 @@ unsafe extern "system" fn window_proc(
                 ID_FILE_LOAD => "Load",
                 ID_FILE_EXIT => "Exit",
                 ID_MAP_EDIT => "Edit",
-                ID_ABOUT => "About",
+                ID_ABOUT => {
+                    show_about(hwnd);
+                    return 0;
+                }
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
             };
             show_placeholder(hwnd, caption);
@@ -311,6 +316,21 @@ fn update_status(state: &WindowState) {
 fn show_placeholder(hwnd: HWND, command: &str) {
     let title = wide(command);
     let message = wide(&format!("{command} is not implemented yet."));
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        )
+    };
+}
+
+fn show_about(hwnd: HWND) {
+    let title = wide(&format!("About {APP_NAME}"));
+    let message = wide(&format!(
+        "{APP_NAME}\nVersion {APP_VERSION}\n\n{APP_DESCRIPTION}\n\nAuthor: {APP_AUTHOR}\n{APP_COPYRIGHT}\n{APP_WEBSITE}"
+    ));
     unsafe {
         MessageBoxW(
             hwnd,
