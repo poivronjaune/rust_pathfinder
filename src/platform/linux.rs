@@ -7,12 +7,14 @@ use gtk4::gio;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, DrawingArea, EventControllerKey, MessageDialog,
-    MessageType, Orientation, PopoverMenuBar, Statusbar,
+    AboutDialog, Application, ApplicationWindow, Box as GtkBox, DrawingArea, EventControllerKey,
+    MessageDialog, MessageType, Orientation, PopoverMenuBar, Statusbar,
 };
 
 use crate::app::{AppState, VehicleKey};
-use crate::config::{HEIGHT, WIDTH};
+use crate::config::{
+    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
+};
 
 pub(super) fn run() -> Result<(), String> {
     let application = Application::builder()
@@ -85,7 +87,6 @@ fn install_actions(application: &Application, window: &ApplicationWindow) {
         ("load", "Load"),
         ("exit", "Exit"),
         ("edit", "Edit"),
-        ("about", "About"),
     ] {
         let action = gio::SimpleAction::new(name, None);
         let parent = window.clone();
@@ -94,6 +95,26 @@ fn install_actions(application: &Application, window: &ApplicationWindow) {
         });
         application.add_action(&action);
     }
+
+    let about = gio::SimpleAction::new("about", None);
+    let parent = window.clone();
+    about.connect_activate(move |_, _| show_about(&parent));
+    application.add_action(&about);
+}
+
+fn show_about(parent: &ApplicationWindow) {
+    let dialog = AboutDialog::builder()
+        .transient_for(parent)
+        .modal(true)
+        .program_name(APP_NAME)
+        .version(APP_VERSION)
+        .comments(APP_DESCRIPTION)
+        .authors([APP_AUTHOR])
+        .copyright(APP_COPYRIGHT)
+        .license_type(gtk4::License::MitX11)
+        .website(APP_WEBSITE)
+        .build();
+    dialog.present();
 }
 
 fn install_vehicle_keys(
