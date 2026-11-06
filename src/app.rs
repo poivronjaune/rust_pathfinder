@@ -1,8 +1,11 @@
+use std::path::Path;
+
 use crate::car::Car;
 #[cfg(target_os = "windows")]
 use crate::config::CELL_SIZE;
 use crate::config::{HEIGHT, WIDTH};
 use crate::grid::Grid;
+use crate::map_file;
 use crate::render;
 
 #[derive(Clone, Copy)]
@@ -52,6 +55,28 @@ impl AppState {
         (previous, current)
     }
 
+    /// Replaces the map with one where every cell is unknown. The car stays where it is.
+    pub(crate) fn new_map(&mut self) {
+        self.set_grid(Grid::unknown());
+    }
+
+    pub(crate) fn save_map(&self, path: &Path) -> Result<(), String> {
+        map_file::save(&self.grid, path)
+    }
+
+    /// Replaces the map with the one saved at `path`, keeping the current map if the file cannot be
+    /// loaded. The car stays where it is.
+    pub(crate) fn load_map(&mut self, path: &Path) -> Result<(), String> {
+        let grid = map_file::load(path)?;
+        self.set_grid(grid);
+        Ok(())
+    }
+
+    fn set_grid(&mut self, grid: Grid) {
+        self.grid = grid;
+        render::draw(&mut self.buffer, &self.grid, self.car);
+    }
+
     pub(crate) fn status_text(&self) -> String {
         let direction = match self.car.direction {
             crate::car::Direction::Up => "Up",
@@ -90,7 +115,9 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::{AppState, VehicleKey};
-    use crate::config::{CELL_SIZE, WIDTH};
+    use crate::config::{CELL_SIZE, HEIGHT, WIDTH};
+    use crate::grid::Cell;
+    use crate::render;
 
     #[test]
     fn movement_updates_only_the_previous_and_current_cells() {
@@ -111,6 +138,56 @@ mod tests {
 
         assert_eq!(changed.0, changed.1);
         assert_cells_changed_only(&previous_buffer, &state.buffer, &[changed.1]);
+    }
+
+    #[test]
+    fn new_map_marks_every_cell_unknown_and_keeps_the_car() {
+        let mut state = AppState::new();
+        state.handle_vehicle_key(VehicleKey::Forward);
+        state.handle_vehicle_key(VehicleKey::TurnRight);
+        let car = state.car;
+
+        state.new_map();
+
+        let cells = state.grid.cells;
+        assert!(cells.iter().flatten().all(|&cell| cell == Cell::Unknown));
+        assert_eq!(state.car, car);
+        let mut expected = vec![0; WIDTH * HEIGHT];
+        render::draw(&mut expected, &state.grid, car);
+        assert!(state.buffer == expected);
+    }
+
+    #[test]
+    fn saved_map_loads_back_and_keeps_the_car() {
+        let file_name = format!("rust_pathfinder_test_map_{}.json", std::process::id());
+        let path = std::env::temp_dir().join(file_name);
+        let mut state = AppState::new();
+        state.handle_vehicle_key(VehicleKey::Forward);
+        let (car, cells, buffer) = (state.car, state.grid.cells, state.buffer.clone());
+
+        let saved = state.save_map(&path);
+        state.new_map();
+        let loaded = state.load_map(&path);
+        let _ = std::fs::remove_file(&path);
+
+        saved.unwrap();
+        loaded.unwrap();
+        assert_eq!(state.car, car);
+        assert_eq!(state.grid.cells, cells);
+        assert!(state.buffer == buffer);
+    }
+
+    #[test]
+    fn failed_load_keeps_the_current_map() {
+        let path = std::env::temp_dir()
+            .join("rust_pathfinder_missing_folder")
+            .join("map.json");
+        let mut state = AppState::new();
+        let (cells, buffer) = (state.grid.cells, state.buffer.clone());
+
+        assert!(state.load_map(&path).is_err());
+        assert_eq!(state.grid.cells, cells);
+        assert!(state.buffer == buffer);
     }
 
     fn assert_cells_changed_only(before: &[u32], after: &[u32], changed_cells: &[(usize, usize)]) {
