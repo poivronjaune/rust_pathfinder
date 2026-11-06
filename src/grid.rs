@@ -1,3 +1,7 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::config::{CLEAR_RADIUS, GRID_SIZE};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cell {
     Free,
