@@ -133,3 +133,4 @@ mod tests {
         assert!(any_expected_pixel_changed);
     }
 }
+
