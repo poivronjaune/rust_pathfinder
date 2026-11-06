@@ -1,6 +1,8 @@
 pub(crate) const GRID_SIZE: usize = 20;
 pub(crate) const CELL_SIZE: usize = 20;
 pub(crate) const BORDER_WIDTH: usize = 1;
+/// Radius (in cells) of the free area generated around the car.
+pub(crate) const CLEAR_RADIUS: usize = 4;
 
 pub(crate) const WIDTH: usize = GRID_SIZE * CELL_SIZE;
 pub(crate) const HEIGHT: usize = GRID_SIZE * CELL_SIZE;
