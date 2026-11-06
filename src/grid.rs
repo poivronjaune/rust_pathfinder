@@ -1,8 +1,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::{CLEAR_RADIUS, GRID_SIZE};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Terrain of one grid cell. The serialized names are part of the map file format
+/// (`schemas/map.schema.json`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Cell {
     Free,
     Obstacle,
@@ -25,6 +30,13 @@ const ROCK: Feature = (1, (1, 1), (1, 2));
 const MAX_PLACEMENT_ATTEMPTS: usize = 50;
 
 impl Grid {
+    /// A blank map where every cell is still unknown.
+    pub(crate) fn unknown() -> Self {
+        Self {
+            cells: [[Cell::Unknown; GRID_SIZE]; GRID_SIZE],
+        }
+    }
+
     pub(crate) fn backyard(car_row: usize, car_col: usize) -> Self {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -34,9 +46,7 @@ impl Grid {
 
     pub(crate) fn backyard_with_seed(car_row: usize, car_col: usize, seed: u64) -> Self {
         let mut rng = Rng(seed);
-        let mut grid = Self {
-            cells: [[Cell::Unknown; GRID_SIZE]; GRID_SIZE],
-        };
+        let mut grid = Self::unknown();
         // r² + r gives a rounder discrete circle than r².
         let near_car = |row: usize, col: usize| {
             let (dr, dc) = (row.abs_diff(car_row), col.abs_diff(car_col));
@@ -137,6 +147,12 @@ mod tests {
         let a = Grid::backyard_with_seed(5, 5, 42);
         let b = Grid::backyard_with_seed(5, 5, 42);
         assert_eq!(a.cells, b.cells);
+    }
+
+    #[test]
+    fn unknown_grid_has_only_unknown_cells() {
+        let cells = Grid::unknown().cells;
+        assert!(cells.iter().flatten().all(|&cell| cell == Cell::Unknown));
     }
 }
 
