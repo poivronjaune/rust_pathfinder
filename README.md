@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms: Linux and Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#supported-platforms)
 
-A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. This is an interactive prototype—not yet a route planner; map editing and save/load actions are placeholders.
+A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. You can start a blank map and save or load maps as JSON files. This is an interactive prototype—not yet a route planner—and map editing is still a placeholder.
 
 ## Features
 
@@ -12,7 +12,8 @@ A small cross-platform Rust desktop prototype for exploring a grid-based map and
 - Resizable 20 × 20 grid with free, obstacle, and unknown terrain
 - Keyboard-controlled vehicle: Up/Down to move, Left/Right to turn
 - Status display showing the vehicle's position and heading
-- Native menus with placeholder actions
+- File menu to start a blank map and to save and load [map files](#map-files) in JSON
+- Native menus; File → Exit and Map → Edit are still placeholders
 
 ## Requirements
 
@@ -72,6 +73,25 @@ cargo run
 
 Movement is bounded by the grid edges. The current prototype does not prevent movement into obstacle cells.
 
+## Map files
+
+| File menu command | Action |
+| --- | --- |
+| New | Replace the map with a blank one where every cell is unknown |
+| Save | Save the current map to a JSON file |
+| Load | Replace the current map with one saved earlier |
+
+Map files store only the terrain: the vehicle keeps its position and heading when you start, save, or load a map. If a file can't be read or isn't a valid 20 × 20 map, an error message is shown and the current map is left unchanged.
+
+The format is defined by a [JSON Schema](https://json-schema.org/) (draft 2020-12) in [`schemas/map.schema.json`](schemas/map.schema.json). Saved files reference it through their `$schema` property, so editors such as VS Code can validate them. Each grid row is written on its own line.
+
+| Property | Description |
+| --- | --- |
+| `$schema` | Optional link to the schema, used by editors for validation |
+| `formatVersion` | Version of the file format, currently `1` |
+| `rows`, `columns` | Size of the grid |
+| `cells` | Terrain addressed as `cells[row][column]`, with row 0 at the top: `"free"`, `"obstacle"`, or `"unknown"` |
+
 ## Build and test
 
 ```sh
@@ -83,10 +103,11 @@ To create an optimized build, run `cargo build --release`. The executable is wri
 
 ## Libraries and dependencies
 
-The project uses the following direct dependencies, declared by platform in `Cargo.toml`:
+The project uses the following direct dependencies, declared in `Cargo.toml` (the user interface libraries are platform-specific):
 
 - **[gtk4](https://crates.io/crates/gtk4) `0.10`** — Linux desktop UI and drawing, using GTK 4 (and its Cairo integration).
-- **[windows-sys](https://crates.io/crates/windows-sys) `0.61`** — Windows API bindings for the native window, menus, status bar, and GDI rendering.
+- **[windows-sys](https://crates.io/crates/windows-sys) `0.61`** — Windows API bindings for the native window, menus, file dialogs, status bar, and GDI rendering.
+- **[serde](https://crates.io/crates/serde) `1.0`** and **[serde_json](https://crates.io/crates/serde_json) `1.0`** — reading and writing map files.
 - **Rust standard library** — shared application logic and platform-independent functionality.
 
 Cargo resolves and downloads Rust crate dependencies automatically. Linux also needs the GTK 4 system development libraries installed separately.
