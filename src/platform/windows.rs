@@ -365,6 +365,10 @@ fn update_changed_cells(
     state: &mut WindowState,
     changed: ((usize, usize), (usize, usize)),
 ) -> Result<(), String> {
+    if state.back_buffer.is_none() {
+        return Ok(());
+    }
+
     let cells = [changed.0, changed.1];
     let mut dirty_rects = Vec::with_capacity(cells.len());
     {
