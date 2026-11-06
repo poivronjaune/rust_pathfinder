@@ -94,3 +94,6 @@ Cargo resolves and downloads Rust crate dependencies automatically. Linux also n
 ## License
 
 This project is distributed under the MIT License. See [LICENSE](LICENSE).
+```sh
+git stash push --include-untracked -m "work in progress"
+```
