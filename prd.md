@@ -3,7 +3,7 @@
 ## 1. Overview
 
 ### Product name
-my_app
+Rust PathFinder
 
 ### Product type
 Desktop prototype for a grid-based backyard mapping and navigation experience.
@@ -12,7 +12,7 @@ Desktop prototype for a grid-based backyard mapping and navigation experience.
 Interactive prototype with placeholder menu actions.
 
 ### Summary
-my_app is a small desktop application that displays a 20 x 20 grid and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys and can observe the current row, column, and heading in a status area. The current implementation is intentionally limited to visualizing a sample map and vehicle state; it does not yet provide editing, persistence, route planning, or autonomous navigation.
+Rust PathFinder is a small desktop application that displays a 20 x 20 grid and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys and can observe the current row, column, and heading in a status area. The current implementation is intentionally limited to visualizing a sample map and vehicle state; it does not yet provide editing, persistence, route planning, or autonomous navigation.
 
 ## 2. Problem and opportunity
 
