@@ -21,7 +21,7 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub(crate) fn new() -> Self {
-        let grid = Grid::new();
+        let grid = Grid::backyard(car.row, car.col);
         let car = Car::default();
         let mut buffer = vec![0; WIDTH * HEIGHT];
         render::draw(&mut buffer, &grid, car);
