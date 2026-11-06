@@ -1,3 +1,56 @@
 {
-    
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json",
+  "$comment": "Read and written by src/map_file.rs, whose tests check that the code and this schema agree.",
+  "title": "Rust Pathfinder map",
+  "description": "Terrain map written by File > Save and read by File > Load in Rust Pathfinder. The map is a rectangular grid stored row by row: the first row is the top of the map and each row lists its cells from left to right. The current version of Rust Pathfinder reads and writes 20 x 20 maps.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Optional URI of the schema this file conforms to, so editors can validate it. Rust Pathfinder writes the $id of this schema and ignores the value when loading.",
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "formatVersion": {
+      "description": "Version of the map file format. It only changes when the format changes in a way that older versions of Rust Pathfinder cannot read.",
+      "type": "integer",
+      "const": 1
+    },
+    "rows": {
+      "description": "Number of rows in the grid. Must equal the number of rows in cells.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "columns": {
+      "description": "Number of columns in the grid. Must equal the number of cells in every row of cells.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "cells": {
+      "description": "Terrain of every cell, addressed as cells[row][column]. Row 0 is the top of the map and column 0 is its left edge.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    }
+  },
+  "required": ["formatVersion", "rows", "columns", "cells"],
+  "additionalProperties": false,
+  "$defs": {
+    "row": {
+      "description": "One row of the grid, listing its cells from left to right.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/cell"
+      }
+    },
+    "cell": {
+      "description": "Terrain of one cell: \"free\" is open ground, \"obstacle\" is blocked ground and \"unknown\" has not been mapped yet.",
+      "type": "string",
+      "enum": ["free", "obstacle", "unknown"]
+    }
+  }
 }
+
