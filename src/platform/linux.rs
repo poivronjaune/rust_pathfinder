@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk4::cairo::{Format, ImageSurface};
@@ -8,13 +9,15 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     AboutDialog, Application, ApplicationWindow, Box as GtkBox, DrawingArea, EventControllerKey,
-    MessageDialog, MessageType, Orientation, PopoverMenuBar, Statusbar,
+    FileChooserAction, FileChooserNative, FileFilter, MessageDialog, MessageType, Orientation,
+    PopoverMenuBar, ResponseType, Statusbar,
 };
 
 use crate::app::{AppState, VehicleKey};
 use crate::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
 };
+use crate::map_file::DEFAULT_FILE_NAME;
 
 pub(super) fn run() -> Result<(), String> {
     let application = Application::builder()
@@ -57,7 +60,7 @@ fn build_window(application: &Application) {
         draw_grid(&draw_state, context, width, height);
     });
 
-    install_actions(application, &window);
+    install_actions(application, &window, &state, &drawing_area);
     install_vehicle_keys(&drawing_area, &window, &state, &status_bar, status_context);
     window.present();
     drawing_area.grab_focus();
@@ -65,9 +68,10 @@ fn build_window(application: &Application) {
 
 fn create_menu_bar() -> PopoverMenuBar {
     let file_menu = gio::Menu::new();
-    file_menu.append(Some("New"), Some("app.new"));
-    file_menu.append(Some("Save"), Some("app.save"));
-    file_menu.append(Some("Load"), Some("app.load"));
+    // New, Save and Load act on this window's own map, so they are window actions.
+    file_menu.append(Some("New"), Some("win.new"));
+    file_menu.append(Some("Save"), Some("win.save"));
+    file_menu.append(Some("Load"), Some("win.load"));
     file_menu.append(Some("Exit"), Some("app.exit"));
 
     let map_menu = gio::Menu::new();
@@ -80,14 +84,55 @@ fn create_menu_bar() -> PopoverMenuBar {
     PopoverMenuBar::from_model(Some(&menu_model))
 }
 
-fn install_actions(application: &Application, window: &ApplicationWindow) {
-    for (name, label) in [
-        ("new", "New"),
-        ("save", "Save"),
-        ("load", "Load"),
-        ("exit", "Exit"),
-        ("edit", "Edit"),
-    ] {
+fn install_actions(
+    application: &Application,
+    window: &ApplicationWindow,
+    state: &Rc<RefCell<AppState>>,
+    drawing_area: &DrawingArea,
+) {
+    let new_map = gio::SimpleAction::new("new", None);
+    let new_state = Rc::clone(state);
+    let new_area = drawing_area.clone();
+    new_map.connect_activate(move |_, _| {
+        new_state.borrow_mut().new_map();
+        new_area.queue_draw();
+    });
+    window.add_action(&new_map);
+
+    let save_map = gio::SimpleAction::new("save", None);
+    let save_state = Rc::clone(state);
+    let save_window = window.clone();
+    save_map.connect_activate(move |_, _| {
+        let state = Rc::clone(&save_state);
+        let parent = save_window.clone();
+        choose_map_file(&save_window, FileChooserAction::Save, move |path| {
+            let result = state.borrow().save_map(&path);
+            if let Err(error) = result {
+                show_error(&parent, "Save", &error);
+            }
+        });
+    });
+    window.add_action(&save_map);
+
+    let load_map = gio::SimpleAction::new("load", None);
+    let load_state = Rc::clone(state);
+    let load_window = window.clone();
+    let load_area = drawing_area.clone();
+    load_map.connect_activate(move |_, _| {
+        let state = Rc::clone(&load_state);
+        let parent = load_window.clone();
+        let area = load_area.clone();
+        choose_map_file(&load_window, FileChooserAction::Open, move |path| {
+            let result = state.borrow_mut().load_map(&path);
+            match result {
+                Ok(()) => area.queue_draw(),
+                Err(error) => show_error(&parent, "Load", &error),
+            }
+        });
+    });
+    window.add_action(&load_map);
+
+    for (name, label) in [("exit", "Exit"), ("edit", "Edit")] {
         let action = gio::SimpleAction::new(name, None);
         let parent = window.clone();
         action.connect_activate(move |_, _| {
@@ -100,6 +145,53 @@ fn install_actions(application: &Application, window: &ApplicationWindow) {
     let parent = window.clone();
     about.connect_activate(move |_, _| show_about(&parent));
     application.add_action(&about);
+}
+
+/// Shows the native file chooser for map files and passes the chosen path to `on_chosen`.
+fn choose_map_file(
+    parent: &ApplicationWindow,
+    action: FileChooserAction,
+    on_chosen: impl Fn(PathBuf) + 'static,
+) {
+    let (title, accept_label) = if action == FileChooserAction::Save {
+        ("Save Map", "_Save")
+    } else {
+        ("Load Map", "_Load")
+    };
+    let dialog = FileChooserNative::new(
+        Some(title),
+        Some(parent),
+        action,
+        Some(accept_label),
+        Some("_Cancel"),
+    );
+    dialog.set_modal(true);
+    let map_files = FileFilter::new();
+    map_files.set_name(Some("Map files (*.json)"));
+    map_files.add_pattern("*.json");
+    dialog.add_filter(&map_files);
+    let all_files = FileFilter::new();
+    all_files.set_name(Some("All files"));
+    all_files.add_pattern("*");
+    dialog.add_filter(&all_files);
+    if action == FileChooserAction::Save {
+        dialog.set_current_name(DEFAULT_FILE_NAME);
+    }
+
+    // GTK does not keep native dialogs alive, so hold a reference until the user responds.
+    let keep_alive = RefCell::new(Some(dialog.clone()));
+    dialog.connect_response(move |dialog, response| {
+        let file = if response == ResponseType::Accept {
+            dialog.file()
+        } else {
+            None
+        };
+        if let Some(path) = file.and_then(|file| file.path()) {
+            on_chosen(path);
+        }
+        drop(keep_alive.take());
+    });
+    dialog.show();
 }
 
 fn show_about(parent: &ApplicationWindow) {
@@ -214,12 +306,21 @@ fn draw_grid(
 }
 
 fn show_placeholder(parent: &ApplicationWindow, title: &str) {
+    let message = format!("{title} is not implemented yet.");
+    show_message(parent, title, &message, MessageType::Info);
+}
+
+fn show_error(parent: &ApplicationWindow, title: &str, message: &str) {
+    show_message(parent, title, message, MessageType::Error);
+}
+
+fn show_message(parent: &ApplicationWindow, title: &str, text: &str, message_type: MessageType) {
     let dialog = MessageDialog::builder()
         .transient_for(parent)
         .modal(true)
-        .message_type(MessageType::Info)
+        .message_type(message_type)
         .buttons(gtk4::ButtonsType::Ok)
-        .text(format!("{title} is not implemented yet."))
+        .text(text)
         .build();
     dialog.set_title(Some(title));
     dialog.connect_response(|dialog, _| dialog.close());
