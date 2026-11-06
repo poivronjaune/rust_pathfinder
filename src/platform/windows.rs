@@ -1,5 +1,7 @@
-use std::ffi::c_void;
+use std::ffi::{OsString, c_void};
 use std::mem::{size_of, zeroed};
+use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -10,22 +12,28 @@ use windows_sys::Win32::Graphics::Gdi::{
     SRCCOPY, SelectObject, StretchDIBits,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Controls::Dialogs::{
+    CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+    OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+};
 use windows_sys::Win32::UI::Controls::{
     ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, SB_SETTEXTW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateMenu, CreatePopupMenu,
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMessageW,
-    HMENU, IDC_ARROW, LoadCursorW, MB_ICONINFORMATION, MB_OK, MF_POPUP, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_NCCREATE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    HMENU, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
+    MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_NCCREATE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    WS_VISIBLE,
 };
 
 use crate::app::{AppState, VehicleKey};
 use crate::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
 };
+use crate::map_file::DEFAULT_FILE_NAME;
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
@@ -35,6 +43,8 @@ const ID_MAP_EDIT: usize = 1101;
 const ID_ABOUT: usize = 1201;
 const STATUS_HEIGHT: i32 = 24;
 const WINDOW_CLASS: &str = "PathPlannerGridWindow";
+/// Size of the file name buffer used by the Save and Load dialogs, in UTF-16 code units.
+const FILE_NAME_CAPACITY: usize = 4096;
 
 struct WindowState {
     app: AppState,
@@ -48,6 +58,12 @@ struct BackBuffer {
     previous_bitmap: HGDIOBJ,
     width: i32,
     height: i32,
+}
+
+#[derive(Clone, Copy)]
+enum MapFileDialog {
+    Save,
+    Load,
 }
 
 pub(super) fn run() -> Result<(), String> {
@@ -219,20 +235,15 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            let command = wparam & 0xffff;
-            let caption = match command {
-                ID_FILE_NEW => "New",
-                ID_FILE_SAVE => "Save",
-                ID_FILE_LOAD => "Load",
-                ID_FILE_EXIT => "Exit",
-                ID_MAP_EDIT => "Edit",
-                ID_ABOUT => {
-                    show_about(hwnd);
-                    return 0;
-                }
+            match wparam & 0xffff {
+                ID_FILE_NEW => new_map(hwnd),
+                ID_FILE_SAVE => save_map(hwnd),
+                ID_FILE_LOAD => load_map(hwnd),
+                ID_FILE_EXIT => show_placeholder(hwnd, "Exit"),
+                ID_MAP_EDIT => show_placeholder(hwnd, "Edit"),
+                ID_ABOUT => show_about(hwnd),
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
-            };
-            show_placeholder(hwnd, caption);
+            }
             0
         }
         WM_KEYDOWN => {
@@ -313,17 +324,110 @@ fn update_status(state: &WindowState) {
     };
 }
 
-fn show_placeholder(hwnd: HWND, command: &str) {
-    let title = wide(command);
-    let message = wide(&format!("{command} is not implemented yet."));
-    unsafe {
-        MessageBoxW(
-            hwnd,
-            message.as_ptr(),
-            title.as_ptr(),
-            MB_OK | MB_ICONINFORMATION,
-        )
+fn new_map(hwnd: HWND) {
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.app.new_map();
+        refresh_grid(hwnd, state);
+    }
+}
+
+fn save_map(hwnd: HWND) {
+    let Some(path) = choose_map_file(hwnd, MapFileDialog::Save) else {
+        return;
     };
+    let result = match unsafe { state_mut(hwnd) } {
+        Some(state) => state.app.save_map(&path),
+        None => return,
+    };
+    if let Err(error) = result {
+        show_message(hwnd, "Save", &error, MB_ICONERROR);
+    }
+}
+
+fn load_map(hwnd: HWND) {
+    let Some(path) = choose_map_file(hwnd, MapFileDialog::Load) else {
+        return;
+    };
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    if let Err(error) = state.app.load_map(&path) {
+        show_message(hwnd, "Load", &error, MB_ICONERROR);
+    } else {
+        refresh_grid(hwnd, state);
+    }
+}
+
+/// Repaints the whole grid after the map has been replaced.
+fn refresh_grid(hwnd: HWND, state: &WindowState) {
+    let redrawn = match &state.back_buffer {
+        Some(back_buffer) => back_buffer.draw_full(&state.app.buffer),
+        None => Ok(()),
+    };
+    if let Err(error) = redrawn {
+        eprintln!("Unable to redraw the off-screen grid buffer: {error}");
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    } else {
+        unsafe { InvalidateRect(hwnd, null(), 0) };
+    }
+}
+
+/// Shows the native Save or Open dialog for map files. Returns `None` if the user cancels.
+fn choose_map_file(hwnd: HWND, dialog: MapFileDialog) -> Option<PathBuf> {
+    let (title, initial_name, flags) = match dialog {
+        MapFileDialog::Save => ("Save Map", DEFAULT_FILE_NAME, OFN_OVERWRITEPROMPT),
+        MapFileDialog::Load => ("Load Map", "", OFN_FILEMUSTEXIST),
+    };
+    // Pairs of display name and pattern; the list ends with an empty string.
+    let filter = wide("Map files (*.json)\0*.json\0All files (*.*)\0*.*\0");
+    let title_text = wide(title);
+    let default_extension = wide("json");
+    let mut file_name: Vec<u16> = initial_name.encode_utf16().collect();
+    file_name.resize(FILE_NAME_CAPACITY, 0);
+
+    let mut options: OPENFILENAMEW = unsafe { zeroed() };
+    options.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+    options.hwndOwner = hwnd;
+    options.lpstrFilter = filter.as_ptr();
+    options.nFilterIndex = 1;
+    options.lpstrFile = file_name.as_mut_ptr();
+    options.nMaxFile = FILE_NAME_CAPACITY as u32;
+    options.lpstrTitle = title_text.as_ptr();
+    options.lpstrDefExt = default_extension.as_ptr();
+    options.Flags = flags | OFN_EXPLORER | OFN_HIDEREADONLY | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+
+    let chosen = unsafe {
+        match dialog {
+            MapFileDialog::Save => GetSaveFileNameW(&mut options),
+            MapFileDialog::Load => GetOpenFileNameW(&mut options),
+        }
+    };
+    if chosen == 0 {
+        // The extended error is zero when the user simply cancelled.
+        let error = unsafe { CommDlgExtendedError() };
+        if error != 0 {
+            let message = format!("The file dialog failed (error 0x{error:04X}).");
+            show_message(hwnd, title, &message, MB_ICONERROR);
+        }
+        return None;
+    }
+
+    let length = file_name
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(FILE_NAME_CAPACITY);
+    Some(PathBuf::from(OsString::from_wide(&file_name[..length])))
+}
+
+fn show_placeholder(hwnd: HWND, command: &str) {
+    let message = format!("{command} is not implemented yet.");
+    show_message(hwnd, command, &message, MB_ICONINFORMATION);
+}
+
+fn show_message(hwnd: HWND, title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
+    let title = wide(title);
+    let text = wide(text);
+    unsafe { MessageBoxW(hwnd, text.as_ptr(), title.as_ptr(), MB_OK | icon) };
 }
 
 fn show_about(hwnd: HWND) {
