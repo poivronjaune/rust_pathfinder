@@ -1,215 +1,218 @@
 # Product Requirements Document: my_app
 
-## 1. Product summary
+## 1. Overview
 
-**Product name:** my_app  
-**Product type:** Desktop grid-visualization and simulated-vehicle prototype  
-**Status:** Interactive prototype with placeholder menus
+### Product name
+my_app
 
-my_app is a small Rust desktop application that displays a color-coded, 20 × 20 backyard-style grid and a simulated car. The user can drive the car one cell at a time using the arrow keys: up moves forward, down reverses, and left/right turn the car without moving it. The car is drawn above the map with a red body and a black triangular indicator showing its heading. Platform-native menus provide File, Map, and About; their current actions open informational placeholder dialogs. A platform-styled status area reports the car's position and heading.
+### Product type
+Desktop prototype for a grid-based backyard mapping and navigation experience.
 
-The current product is a visual and input-handling prototype. It does not yet provide map editing, persistent data, route planning, or obstacle-aware navigation.
+### Status
+Interactive prototype with placeholder menu actions.
+
+### Summary
+my_app is a small desktop application that displays a 20 x 20 grid and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys and can observe the current row, column, and heading in a status area. The current implementation is intentionally limited to visualizing a sample map and vehicle state; it does not yet provide editing, persistence, route planning, or autonomous navigation.
 
 ## 2. Problem and opportunity
 
-A grid map provides a simple visual foundation for experimenting with a backyard mapping and navigation application. A visible car, discrete movement, and clear keyboard controls make it possible to explore how vehicle orientation and position relate to a mapped environment before adding more advanced mapping or path-planning capabilities.
+Users exploring early concepts for a backyard mapping or navigation tool need a simple, visual proof of concept that demonstrates a map grid, a vehicle model, and discrete movement controls. A small prototype with clear keyboard interaction and cross-platform native framing provides a foundation for future features such as obstacle handling, map editing, and route planning.
 
-## 3. Goals
+This prototype exists to validate the interaction model and platform structure before investing in more advanced product behavior.
 
-- Display a legible, color-coded grid representing free, obstacle, and unknown terrain.
-- Represent a simulated car in a single grid cell, including its current heading.
-- Provide intuitive, discrete vehicle controls using the arrow keys.
-- Provide native File, Map, and About menus with placeholder dialogs for their menu items.
-- Show the vehicle position and heading in a status area.
-- Use a native window shell on Windows and Linux while sharing the map and vehicle logic.
-- Keep the vehicle within the grid boundaries.
-- Establish a compact, maintainable Rust foundation for future mapping and navigation features.
+## 3. Product goals
+
+- Display a clear 20 x 20 grid with distinct terrain states.
+- Show exactly one simulated vehicle at a time.
+- Allow the user to move the vehicle in discrete steps using keyboard input.
+- Keep vehicle movement bounded within the map.
+- Present state information in a platform-native status area.
+- Provide a native desktop shell on both Windows and Linux using the same shared app logic.
+- Establish an extensible Rust foundation for future plotting, map editing, and navigation features.
 
 ## 4. Non-goals
 
-The current version does not:
+The current prototype does not include:
 
-- Detect, avoid, or prevent movement into obstacle or unknown cells.
-- Include collision response, pathfinding, route visualization, or autonomous driving.
-- Allow users to edit, import, export, or save maps.
-- Persist vehicle state or map state between application launches.
-- Provide mouse-based map editing, touch controls, game-controller support, or configurable vehicle keys.
-- Model real-world scale, vehicle physics, speed, acceleration, or turning radius.
-- Include multiple vehicles, a mission system, or telemetry.
+- Real obstacle avoidance or collision handling
+- Map editing or import/export
+- Persistent storage of map or vehicle state
+- Autonomous route planning or destination selection
+- Real-world navigation physics or scale
+- Multiple vehicles or mission management
+- Advanced accessibility controls beyond the current UI shell
 
 ## 5. Target users
 
-- Developers prototyping a grid-based backyard mapping or navigation application.
-- Users who want to inspect a simple map and manually move a simulated vehicle.
+- Developers prototyping grid-based map or navigation interactions
+- Users evaluating a simple visual representation of a vehicle moving within a bounded map
+- Early design stakeholders validating the interaction model before feature expansion
 
-## 6. Product experience
+## 6. User experience
 
 ### 6.1 Startup
 
-On launch, the application opens a resizable desktop window titled **“20 x 20 Grid”**. It renders a 20 × 20 grid in the window's client area, below the native menu and above the status area. Each cell has a one-pixel blue border and an interior fill representing the cell type. A red car appears in the center column of the bottom row, initially facing upward.
+On launch, the application opens a desktop window titled "20 x 20 Grid". The window contains a native menu bar, a central grid visualization, and a status area beneath the grid.
 
-The grid is generated deterministically on each launch using row and column patterns. It is a sample map rather than user-created or loaded backyard data.
+The initial view shows a deterministic sample terrain map and a single vehicle positioned in the bottom-center cell facing upward.
 
-### 6.2 Map and visual encoding
+### 6.2 Grid and terrain
 
-| Map element | Appearance | Meaning |
-|---|---|---|
-| Free cell | Green interior | Traversable/free terrain in the map representation |
-| Obstacle cell | Brown interior | Obstacle terrain in the map representation |
-| Unknown cell | Gray interior | Unexplored or unknown terrain |
-| Cell border | Blue | Grid-cell boundary |
-| Car body | Red | Simulated vehicle location |
-| Car indicator | Black triangle | The direction in which the car is facing |
+The map is a fixed 20 x 20 matrix. Each cell is rendered with a border and a fill color representing its terrain:
 
-The car is drawn after the map, so its body and indicator cover the underlying cell. The triangle rotates to match the car's heading.
+- Free terrain: green
+- Obstacle terrain: brown
+- Unknown terrain: gray
 
-### 6.3 Vehicle controls
+The map is generated deterministically on startup and is intended as a visual demonstration rather than a user-authored map.
 
-Controls are handled as discrete key presses; holding a key does not continuously move or rotate the car.
+### 6.3 Vehicle behavior
 
-| Key | Action |
-|---|---|
-| Up arrow | Move forward one cell in the current heading |
-| Down arrow | Move backward one cell, opposite the current heading; heading is unchanged |
-| Left arrow | Turn 90° counterclockwise in place |
-| Right arrow | Turn 90° clockwise in place |
-| Escape | Close the application when the grid has keyboard focus |
+The vehicle is represented as a red body with a black triangular indicator showing heading direction. The car occupies one grid cell at a time and can be moved with discrete keyboard actions:
 
-Forward and reverse movement are clamped at the grid edges. A blocked move leaves the vehicle at the edge; it does not wrap to the opposite side. Turning is allowed at any cell, including the grid edges.
+- Up arrow: move forward one cell along current heading
+- Down arrow: move backward one cell opposite current heading
+- Left arrow: rotate 90 degrees counterclockwise in place
+- Right arrow: rotate 90 degrees clockwise in place
+- Escape: close the application when the grid has keyboard focus
 
-### 6.4 Window behavior
+Movement is clamped to the map edges. Attempted movement beyond the edge leaves the vehicle in place.
 
-The window is resizable. The grid image scales to fit while preserving its aspect ratio; unused space is centered around it. The operating system's menu occupies the top of the window and the status area sits below the grid. Rendering is event-driven and refreshes when the vehicle changes or the window needs repainting.
+### 6.4 Menu experience
 
-### 6.5 Menus
+The application exposes native File, Map, and About menu groups. All menu items currently open placeholder informational dialogs. The menu is intended to represent the future user interaction model for a broader product, not to implement live functionality.
 
-The application provides a native menu bar, with platform-specific implementations:
+### 6.5 Status output
 
-| Menu | Items |
-|---|---|
-| File | New, Save, Load, Exit |
-| Map | Edit |
-| About | No submenu |
+The status area reports the current vehicle state as:
 
-Selecting File or Map opens the platform's dropdown. Selecting About immediately opens a native informational dialog. Selecting any submenu item opens a native informational dialog titled with the selected item and indicating that the feature is not implemented. Menu commands, including Exit, do not yet perform their eventual operations. Dialogs and menus are dismissed using the platform's standard interactions. Escape closes the application when focus is on the grid.
+- Ready
+- Row
+- Column
+- Heading
 
-### 6.6 Status area
-
-The status area uses the platform's standard control styling and displays **Ready**, the car's one-based row and column, and its heading. The displayed vehicle state updates after every arrow-key press.
+The displayed state updates after movement or rotation.
 
 ## 7. Functional requirements
 
 ### FR-1: Grid display
-
 1. The application shall display a 20-row by 20-column grid.
-2. The grid shall occupy a 400 × 400 pixel region in the window client area, with each logical cell rendered as a 20 × 20 pixel region.
-3. Each cell shall have a one-pixel blue border and a fill color corresponding to its terrain type.
-4. The application shall create a deterministic demonstration map containing free, obstacle, and unknown cells.
+2. Each cell shall render with a visible border and a terrain-specific fill color.
+3. The app shall generate a deterministic sample map on startup.
+4. The grid shall be centered within the window and resize proportionally with the window.
 
 ### FR-2: Vehicle display
-
-1. The application shall display exactly one simulated car.
-2. The car shall occupy one grid cell and have a red body.
-3. A black triangular indicator shall identify the car's forward direction.
-4. On startup, the car shall be in the bottom row, center column, facing up.
-5. The car shall render over the map cell at its current position.
+1. The application shall display exactly one simulated vehicle.
+2. The vehicle shall occupy one grid cell.
+3. The vehicle shall be drawn with a red body and black heading indicator.
+4. The initial vehicle shall be in the bottom-center cell and face upward.
 
 ### FR-3: Vehicle movement and turning
-
-1. An up-arrow press shall advance the car one cell along its current heading.
-2. A down-arrow press shall move the car one cell opposite its current heading without changing its heading.
-3. A left-arrow press shall rotate the car 90° counterclockwise in place.
-4. A right-arrow press shall rotate the car 90° clockwise in place.
-5. Movement shall not take the car outside the grid.
-6. Attempted movement beyond an edge shall leave the car in its current cell.
-7. Turning shall not change the car's grid position.
-8. The rendered car position and indicator shall reflect updated state on the next repaint.
+1. An up-arrow press shall move the vehicle forward one cell in the current heading.
+2. A down-arrow press shall move the vehicle backward one cell opposite the current heading.
+3. A left-arrow press shall rotate the vehicle 90 degrees counterclockwise in place.
+4. A right-arrow press shall rotate the vehicle 90 degrees clockwise in place.
+5. Vehicle movement shall not extend beyond the grid boundaries.
+6. Movement attempts beyond the grid edge shall leave the vehicle in place.
+7. Turning shall not change the vehicle's cell position.
 
 ### FR-4: Application lifecycle
-
-1. The application shall remain responsive while its window is open and redraw when its state or size changes.
-2. The application shall report startup errors to standard error and exit with a non-zero status.
-3. Escape shall close the application when the grid has keyboard focus; menus and dialogs shall use their native dismissal behavior.
+1. The application shall launch in a native desktop window.
+2. The application shall close when the user presses Escape while the grid has focus.
+3. The application shall display startup errors to standard error and exit with a non-zero result if it fails to initialize.
 
 ### FR-5: Menus and placeholder actions
-
-1. The application shall display File, Map, and About in a platform-native menu bar above the map.
-2. File shall contain New, Save, Load, and Exit submenu items.
-3. Map shall contain an Edit submenu item.
-4. About shall open its informational dialog directly and shall not display a submenu.
-5. Selecting any menu item shall show a native informational dialog; menu items shall not perform file, map-editing, or exit operations in this prototype.
+1. The application shall show File, Map, and About menu entries.
+2. File shall include New, Save, Load, and Exit.
+3. Map shall include Edit.
+4. About shall open a native informational dialog directly.
+5. Selecting any menu item shall show a placeholder message indicating the action is not implemented yet.
 
 ### FR-6: Status area
-
-1. The application shall display a platform-styled status area below the grid.
+1. The application shall display a status area beneath the grid.
 2. The status area shall report the vehicle's row, column, and heading.
-3. Vehicle state shown in the status area shall update after each arrow-key press.
+3. Status text shall update after movement or turning.
 
-## 8. User stories
+## 8. Non-functional requirements
 
-- **As a user**, I want to see a grid with distinct terrain colors so that I can distinguish free, obstacle, and unexplored areas.
-- **As a user**, I want to see a car's heading so that its orientation is clear while navigating the grid.
-- **As a user**, I want to move forward or backward one cell at a time so that I can control the car precisely.
-- **As a user**, I want to turn left or right without moving so that I can orient the car before driving.
-- **As a user**, I want the car to remain within the map so that movement at boundaries is predictable.
-- **As a user**, I want Escape to close the application so that I can exit using the keyboard.
-- **As a user**, I want File and Map menus with the requested items so that the planned actions are discoverable.
-- **As a user**, I want native-looking menus and dialogs so that the application follows my operating system's conventions.
-- **As a user**, I want to see the car's position and heading in the status area so that I can track its state while driving.
+### NFR-1: Cross-platform compatibility
+The application shall support both Windows and Linux with OS-native windowing and menu conventions.
+
+### NFR-2: Deterministic rendering
+The initial map and vehicle state shall be deterministic across launches for prototype consistency.
+
+### NFR-3: Performance
+The app must remain responsive for a fixed-size 20 x 20 grid and a single vehicle in a desktop environment.
+
+### NFR-4: Maintainability
+The app shall keep map, vehicle, rendering, and platform shell logic separated so future capabilities can be added without rewriting the core behavior.
+
+### NFR-5: Prototype clarity
+The implementation shall make it clear that advanced map-editing, route-planning, and persistence features are not yet included.
 
 ## 9. Acceptance criteria
 
-1. Launching the application opens a window showing a 20 × 20 colored grid.
-2. The initial car is visible in the bottom-center cell and points up.
-3. Pressing Up moves the car one cell toward the top of the grid without changing its heading.
-4. Pressing Down moves it one cell opposite its heading without changing its heading.
-5. Pressing Left or Right rotates the indicator by 90° in the corresponding direction and leaves the car in the same cell.
-6. Repeated movement at any grid edge never moves the car outside the grid.
-7. The terrain remains visible and the car is rendered above the cell it occupies.
-8. Pressing Escape exits the application.
-9. File displays New, Save, Load, and Exit; Map displays Edit; About opens directly without a submenu.
-10. Selecting any menu item displays a native placeholder dialog.
-11. The status area shows the current row, column, and heading and updates after movement or turning.
-12. Menu items use the native menu implementation for the current platform, and selecting one opens a platform-styled placeholder dialog.
-13. The Rust project passes `cargo check` on the target platform.
+1. Launching the application opens a window titled "20 x 20 Grid".
+2. The initial view shows a 20 x 20 map with a visible car in the bottom-center cell facing up.
+3. Pressing Up moves the car one cell forward without changing direction.
+4. Pressing Down moves the car one cell backward without changing direction.
+5. Pressing Left or Right rotates the car 90 degrees without moving its position.
+6. Pressing a movement key at the map edge does not move the car outside the grid.
+7. The status area shows the current row, column, and heading and updates after each input.
+8. Selecting any menu item opens a native informational placeholder dialog rather than performing an action.
+9. Escape closes the application when the grid has keyboard focus.
+10. The project compiles successfully in the target environment.
 
-## 10. Usability and accessibility considerations
+## 10. Product decisions and scope boundaries
 
-- Terrain types are currently distinguished by color; future iterations should consider non-color cues, such as symbols or patterns, to improve accessibility.
-- The black heading indicator should remain visually distinct against the red body.
-- Keyboard controls should respond once per press rather than continuously while a key is held.
-- The application currently provides no on-screen legend or vehicle-control instructions; users may need this PRD or other documentation to discover the controls.
+This prototype intentionally does not decide:
 
-## 11. Technical context and constraints
+- Whether obstacles should block vehicle movement
+- Whether maps should be editable or imported
+- Whether route planning should be implemented
+- Whether state should be persisted between sessions
+- Whether the app will become a full backyard-planning product or remain a visual simulation tool
 
-- **Language:** Rust, edition 2024.
-- **Windows shell:** Win32 window, native menus, common-controls status bar, message dialogs, and GDI display of the shared grid buffer.
-- **Linux shell:** GTK 4 application window, popover menu bar, message dialogs, status bar, and Cairo display of the shared grid buffer. Linux builds require GTK 4 development libraries.
-- **Grid representation:** A fixed-size 20 × 20 array with `Free`, `Obstacle`, and `Unknown` cell states.
-- **Vehicle state:** Grid row, grid column, and one of four cardinal headings.
-- **Rendering:** A shared CPU-side 400 × 400 pixel buffer containing only the map and vehicle. Vehicle input redraws the old and new car cells in that buffer. Windows refreshes the scaled off-screen GDI bitmap from the buffer, then invalidates and blits only the affected cell rectangles, keeping display updates buffered and cell-scoped.
-- **Menus and status:** Platform-native menu, dialog, and status-bar implementations.
-- **Code organization:** Rust modules separate application state and input actions, vehicle state, map data, shared rendering, and Windows/Linux window backends.
-- **Map generation:** Deterministic row/column rules in the current implementation.
-- **Persistence:** None.
-- **Platform:** Windows and Linux are the supported targets. Each target uses its native windowing toolkit while sharing the grid, vehicle model, and pixel renderer.
+## 11. Future candidate enhancements
 
-## 12. Assumptions and open product decisions
+These items are explicitly out of scope for the current prototype but may be valuable in future milestones:
 
-- Terrain colors and the fixed 20 × 20 grid are suitable for the initial prototype.
-- The demonstration map is intended for visualization, not as authoritative backyard data.
-- Movement is intentionally discrete and one cell per key press.
-- Obstacle and unknown cells are currently visual categories only; the car can enter them.
-- Future product work should decide whether maps are editable or imported, whether obstacles block motion, and whether the app should support route planning or autonomous navigation.
+- Add user-editable terrain maps
+- Define and implement obstacle collisions
+- Add destination selection and route visualization
+- Add unknown-terrain behavior and pathfinding
+- Persist maps and vehicle state
+- Add accessibility improvements and visual legend support
+- Expand the app into a broader navigation and planning product
 
-## 13. Potential future enhancements
+## 12. Technical implementation context
 
-These are not part of the current requirements:
+This section is intentionally separated from product requirements so the product intent remains clear.
 
-- Add a visible legend and in-app control hints.
-- Allow users to edit terrain cells and create or load a real map.
-- Define and implement collision and unknown-terrain behavior.
-- Add path planning, destination selection, and route visualization.
-- Persist maps and vehicle state.
-- Add configurable controls, accessibility options, and multiple window/display settings.
-- Add unit tests for heading changes, forward/reverse movement, and boundary behavior.
+### Platform architecture
+- Linux: GTK 4-based window, menu bar, keyboard handling, and Cairo rendering
+- Windows: Win32 window, native menu, status bar, and GDI rendering
+
+### Core logic
+- Shared map generation and grid state live in the Rust application core.
+- Vehicle state and movement rules are managed separately from the OS shell.
+- Rendering is performed from a shared pixel buffer so the app can paint the same visual state across platforms.
+
+### Current technical constraints
+- The application is a fixed-size visual prototype.
+- The map is deterministic and generated locally.
+- There is no persistence layer.
+- Menu actions are placeholder UI only.
+- The repo currently targets Linux and Windows desktop environments.
+
+## 13. Requirements summary
+
+This product is a minimal visual prototype intended to prove the interaction model: a fixed grid, a single vehicle, native desktop framing, and keyboard-driven movement. It is not yet a full navigation application. The PRD is intentionally narrow and should remain so until advanced features are explicitly approved.
+
+## 14. Open questions
+
+- Should obstacle cells eventually block motion, or remain visual-only indicators?
+- Should the application become a map editor, a planner, or a simple simulator?
+- Is the target next milestone route planning, map editing, or persistent save/load?
+- Should menus remain placeholder controls or be re-scoped before broader feature work begins?
+
