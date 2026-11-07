@@ -1,4 +1,4 @@
-//! Map files: JSON documents described by `schemas/map.schema.json`.
+//! Map files (`*.map`): JSON documents described by `schemas/map.schema.json`.
 
 use std::fs;
 use std::path::Path;
@@ -12,7 +12,10 @@ use crate::grid::{Cell, Grid};
 const SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json";
 const FORMAT_VERSION: u32 = 1;
-pub(crate) const DEFAULT_FILE_NAME: &str = "map.json";
+/// Extension of map files, without the leading dot.
+pub(crate) const FILE_EXTENSION: &str = "map";
+/// Name suggested when saving a map.
+pub(crate) const DEFAULT_FILE_NAME: &str = "untitled.map";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -125,10 +128,12 @@ fn serialize_rows<S: Serializer>(cells: &[Vec<Cell>], serializer: S) -> Result<S
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::ffi::OsStr;
+    use std::path::Path;
 
     use serde_json::{Value, json};
 
-    use super::{FORMAT_VERSION, SCHEMA_URL, from_json, to_json};
+    use super::{DEFAULT_FILE_NAME, FILE_EXTENSION, FORMAT_VERSION, SCHEMA_URL, from_json, to_json};
     use crate::config::GRID_SIZE;
     use crate::grid::{Cell, Grid};
 
@@ -139,6 +144,12 @@ mod tests {
         let grid = Grid::backyard_with_seed(GRID_SIZE - 1, GRID_SIZE / 2, 7);
         let loaded = from_json(&to_json(&grid).unwrap()).unwrap();
         assert_eq!(loaded.cells, grid.cells);
+    }
+
+    #[test]
+    fn default_file_name_uses_the_map_extension() {
+        let extension = Path::new(DEFAULT_FILE_NAME).extension();
+        assert_eq!(extension, Some(OsStr::new(FILE_EXTENSION)));
     }
 
     #[test]
