@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn saved_map_loads_back_and_keeps_the_car() {
-        let file_name = format!("rust_pathfinder_test_map_{}.json", std::process::id());
+        let file_name = format!("rust_pathfinder_test_map_{}.map", std::process::id());
         let path = std::env::temp_dir().join(file_name);
         let mut state = AppState::new();
         state.handle_vehicle_key(VehicleKey::Forward);
@@ -181,7 +181,7 @@ mod tests {
     fn failed_load_keeps_the_current_map() {
         let path = std::env::temp_dir()
             .join("rust_pathfinder_missing_folder")
-            .join("map.json");
+            .join("missing.map");
         let mut state = AppState::new();
         let (cells, buffer) = (state.grid.cells, state.buffer.clone());
 
