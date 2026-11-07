@@ -33,7 +33,7 @@ use crate::app::{AppState, VehicleKey};
 use crate::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
 };
-use crate::map_file::DEFAULT_FILE_NAME;
+use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
@@ -239,7 +239,9 @@ unsafe extern "system" fn window_proc(
                 ID_FILE_NEW => new_map(hwnd),
                 ID_FILE_SAVE => save_map(hwnd),
                 ID_FILE_LOAD => load_map(hwnd),
-                ID_FILE_EXIT => show_placeholder(hwnd, "Exit"),
+                ID_FILE_EXIT => {
+                    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                }
                 ID_MAP_EDIT => show_placeholder(hwnd, "Edit"),
                 ID_ABOUT => show_about(hwnd),
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
@@ -379,9 +381,11 @@ fn choose_map_file(hwnd: HWND, dialog: MapFileDialog) -> Option<PathBuf> {
         MapFileDialog::Load => ("Load Map", "", OFN_FILEMUSTEXIST),
     };
     // Pairs of display name and pattern; the list ends with an empty string.
-    let filter = wide("Map files (*.json)\0*.json\0All files (*.*)\0*.*\0");
+    let filter = wide(&format!(
+        "Map files (*.{FILE_EXTENSION})\0*.{FILE_EXTENSION}\0All files (*.*)\0*.*\0"
+    ));
     let title_text = wide(title);
-    let default_extension = wide("json");
+    let default_extension = wide(FILE_EXTENSION);
     let mut file_name: Vec<u16> = initial_name.encode_utf16().collect();
     file_name.resize(FILE_NAME_CAPACITY, 0);
 
