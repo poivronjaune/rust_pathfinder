@@ -3,7 +3,7 @@
   "$id": "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json",
   "$comment": "Read and written by src/map_file.rs, whose tests check that the code and this schema agree.",
   "title": "Rust Pathfinder map",
-  "description": "Terrain map written by File > Save and read by File > Load in Rust Pathfinder. The map is a rectangular grid stored row by row: the first row is the top of the map and each row lists its cells from left to right. The current version of Rust Pathfinder reads and writes 20 x 20 maps.",
+  "description": "Terrain map written by File > Save and read by File > Load in Rust Pathfinder. Map files use the .map file extension and contain this JSON document. The map is a rectangular grid stored row by row: the first row is the top of the map and each row lists its cells from left to right. The current version of Rust Pathfinder reads and writes 20 x 20 maps.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -53,4 +53,3 @@
     }
   }
 }
-
