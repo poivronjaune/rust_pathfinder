@@ -1,24 +1,31 @@
 use crate::car::{Car, Direction};
 use crate::config::{
-    BORDER, BORDER_WIDTH, CAR_BLACK, CAR_RED, CELL_SIZE, FREE, OBSTACLE, UNKNOWN, WIDTH,
+    BORDER, BORDER_WIDTH, CAR_BLACK, CAR_RED, CELL_SIZE, EDIT_BORDER, FREE, OBSTACLE, UNKNOWN,
+    WIDTH,
 };
 use crate::grid::{Cell, Grid};
 
-pub(crate) fn draw(buffer: &mut [u32], grid: &Grid, car: Car) {
+/// Colors explained by the legend, in display order.
+pub(crate) const LEGEND: [(&str, u32); 4] = [
+    ("Free", FREE),
+    ("Obstacle", OBSTACLE),
+    ("Unknown", UNKNOWN),
+    ("Vehicle", CAR_RED),
+];
+
+/// Draws the whole map. In edit mode the grid lines use the edit color.
+pub(crate) fn draw(buffer: &mut [u32], grid: &Grid, car: Car, editing: bool) {
     for (row, cells) in grid.cells.iter().enumerate() {
         for (col, cell) in cells.iter().enumerate() {
-            draw_cell(buffer, col, row, *cell);
+            draw_cell(buffer, col, row, *cell, editing);
         }
     }
     draw_car_cell(buffer, car);
 }
 
-pub(crate) fn draw_cell(buffer: &mut [u32], col: usize, row: usize, cell: Cell) {
-    let fill = match cell {
-        Cell::Free => FREE,
-        Cell::Obstacle => OBSTACLE,
-        Cell::Unknown => UNKNOWN,
-    };
+pub(crate) fn draw_cell(buffer: &mut [u32], col: usize, row: usize, cell: Cell, editing: bool) {
+    let fill = cell_color(cell);
+    let border = if editing { EDIT_BORDER } else { BORDER };
 
     let x0 = col * CELL_SIZE;
     let y0 = row * CELL_SIZE;
@@ -28,9 +35,17 @@ pub(crate) fn draw_cell(buffer: &mut [u32], col: usize, row: usize, cell: Cell) 
             let on_border = !(BORDER_WIDTH..CELL_SIZE - BORDER_WIDTH).contains(&dx)
                 || !(BORDER_WIDTH..CELL_SIZE - BORDER_WIDTH).contains(&dy);
 
-            let color = if on_border { BORDER } else { fill };
+            let color = if on_border { border } else { fill };
             buffer[(y0 + dy) * WIDTH + (x0 + dx)] = color;
         }
+    }
+}
+
+fn cell_color(cell: Cell) -> u32 {
+    match cell {
+        Cell::Free => FREE,
+        Cell::Obstacle => OBSTACLE,
+        Cell::Unknown => UNKNOWN,
     }
 }
 
@@ -84,6 +99,19 @@ pub(crate) fn draw_car_cell(buffer: &mut [u32], car: Car) {
                     buffer[y * WIDTH + x] = CAR_BLACK;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LEGEND, cell_color};
+    use crate::grid::Cell;
+
+    #[test]
+    fn legend_explains_every_terrain_color() {
+        for cell in [Cell::Free, Cell::Obstacle, Cell::Unknown] {
+            assert!(LEGEND.iter().any(|&(_, color)| color == cell_color(cell)));
         }
     }
 }
