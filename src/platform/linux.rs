@@ -17,7 +17,7 @@ use crate::app::{AppState, VehicleKey};
 use crate::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
 };
-use crate::map_file::DEFAULT_FILE_NAME;
+use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
 
 pub(super) fn run() -> Result<(), String> {
     let application = Application::builder()
@@ -132,14 +132,20 @@ fn install_actions(
     });
     window.add_action(&load_map);
 
-    for (name, label) in [("exit", "Exit"), ("edit", "Edit")] {
-        let action = gio::SimpleAction::new(name, None);
-        let parent = window.clone();
-        action.connect_activate(move |_, _| {
-            show_placeholder(&parent, label);
-        });
-        application.add_action(&action);
-    }
+    let exit = gio::SimpleAction::new("exit", None);
+    let exit_application = application.clone();
+    exit.connect_activate(move |_, _| {
+        // Closing every window ends the application, the same way their close buttons do.
+        for app_window in exit_application.windows() {
+            app_window.close();
+        }
+    });
+    application.add_action(&exit);
+
+    let edit = gio::SimpleAction::new("edit", None);
+    let edit_window = window.clone();
+    edit.connect_activate(move |_, _| show_placeholder(&edit_window, "Edit"));
+    application.add_action(&edit);
 
     let about = gio::SimpleAction::new("about", None);
     let parent = window.clone();
@@ -167,8 +173,9 @@ fn choose_map_file(
     );
     dialog.set_modal(true);
     let map_files = FileFilter::new();
-    map_files.set_name(Some("Map files (*.json)"));
-    map_files.add_pattern("*.json");
+    let map_files_name = format!("Map files (*.{FILE_EXTENSION})");
+    map_files.set_name(Some(map_files_name.as_str()));
+    map_files.add_pattern(&format!("*.{FILE_EXTENSION}"));
     dialog.add_filter(&map_files);
     let all_files = FileFilter::new();
     all_files.set_name(Some("All files"));
