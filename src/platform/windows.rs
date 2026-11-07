@@ -4,12 +4,15 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, COLOR_WINDOW, CreateCompatibleBitmap,
-    CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, FillRect, GDI_ERROR,
-    GetDC, GetSysColorBrush, HBITMAP, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC,
-    SRCCOPY, SelectObject, StretchDIBits,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BeginPaint, BitBlt, COLOR_BTNFACE,
+    COLOR_BTNSHADOW, COLOR_BTNTEXT, COLOR_WINDOW, CreateCompatibleBitmap, CreateCompatibleDC,
+    CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CALCRECT, DT_NOPREFIX, DT_SINGLELINE,
+    DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GDI_ERROR, GetDC,
+    GetStockObject, GetSysColor, GetSysColorBrush, HBITMAP, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
+    PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor, StretchDIBits,
+    TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::{
@@ -20,20 +23,22 @@ use windows_sys::Win32::UI::Controls::{
     ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, SB_SETTEXTW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateMenu, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMessageW,
-    HMENU, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
-    MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_NCCREATE, WM_PAINT, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
-    WS_VISIBLE,
+    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CheckMenuItem, CreateMenu, CreatePopupMenu,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMenu,
+    GetMessageW, HMENU, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+    MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW,
+    MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SetWindowLongPtrW, ShowWindow,
+    TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
-use crate::app::{AppState, VehicleKey};
+use crate::app::{AppState, MouseButton, VehicleKey};
 use crate::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
 };
 use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
+use crate::render::LEGEND;
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
@@ -42,6 +47,15 @@ const ID_FILE_EXIT: usize = 1004;
 const ID_MAP_EDIT: usize = 1101;
 const ID_ABOUT: usize = 1201;
 const STATUS_HEIGHT: i32 = 24;
+/// Height of the legend panel between the grid and the status bar.
+const LEGEND_HEIGHT: i32 = 28;
+/// Size of the color samples in the legend.
+const LEGEND_SWATCH: i32 = 14;
+/// Space around the legend and between its entries.
+const LEGEND_SPACING: i32 = 8;
+/// Bits set in a mouse message's `wparam` while the left or right button is held down.
+const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
 const WINDOW_CLASS: &str = "PathPlannerGridWindow";
 /// Size of the file name buffer used by the Save and Load dialogs, in UTF-16 code units.
 const FILE_NAME_CAPACITY: usize = 4096;
@@ -50,6 +64,8 @@ struct WindowState {
     app: AppState,
     status_bar: HWND,
     back_buffer: Option<BackBuffer>,
+    /// Button pressed on the window in edit mode; moving the mouse while it is held paints cells.
+    painting: Option<MouseButton>,
 }
 
 struct BackBuffer {
@@ -96,6 +112,7 @@ pub(super) fn run() -> Result<(), String> {
         app: AppState::new(),
         status_bar: null_mut(),
         back_buffer: None,
+        painting: None,
     });
     let state_pointer = (&mut *state) as *mut WindowState;
     let title = wide("20 x 20 Grid");
@@ -110,7 +127,7 @@ pub(super) fn run() -> Result<(), String> {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             480,
-            500,
+            500 + LEGEND_HEIGHT,
             null_mut(),
             menu,
             instance,
@@ -242,7 +259,7 @@ unsafe extern "system" fn window_proc(
                 ID_FILE_EXIT => {
                     unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
                 }
-                ID_MAP_EDIT => show_placeholder(hwnd, "Edit"),
+                ID_MAP_EDIT => toggle_editing(hwnd),
                 ID_ABOUT => show_about(hwnd),
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
             }
@@ -270,6 +287,25 @@ unsafe extern "system" fn window_proc(
                     eprintln!("Unable to update the off-screen grid buffer: {error}");
                     unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
                 }
+            }
+            0
+        }
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+            let button = if message == WM_LBUTTONDOWN {
+                MouseButton::Left
+            } else {
+                MouseButton::Right
+            };
+            start_painting(hwnd, button, lparam);
+            0
+        }
+        WM_MOUSEMOVE => {
+            continue_painting(hwnd, wparam, lparam);
+            0
+        }
+        WM_LBUTTONUP | WM_RBUTTONUP => {
+            if let Some(state) = unsafe { state_mut(hwnd) } {
+                state.painting = None;
             }
             0
         }
@@ -363,7 +399,7 @@ fn load_map(hwnd: HWND) {
 /// Repaints the whole grid after the map has been replaced.
 fn refresh_grid(hwnd: HWND, state: &WindowState) {
     let redrawn = match &state.back_buffer {
-        Some(back_buffer) => back_buffer.draw_full(&state.app.buffer),
+        Some(back_buffer) => back_buffer.draw_grid(&state.app.buffer),
         None => Ok(()),
     };
     if let Err(error) = redrawn {
@@ -372,6 +408,71 @@ fn refresh_grid(hwnd: HWND, state: &WindowState) {
     } else {
         unsafe { InvalidateRect(hwnd, null(), 0) };
     }
+}
+
+/// Turns edit mode on or off from Map → Edit, which shows a check mark while editing.
+fn toggle_editing(hwnd: HWND) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    let editing = !state.app.is_editing();
+    state.app.set_editing(editing);
+    let check = if editing { MF_CHECKED } else { MF_UNCHECKED };
+    unsafe { CheckMenuItem(GetMenu(hwnd), ID_MAP_EDIT as u32, MF_BYCOMMAND | check) };
+    update_status(state);
+    refresh_grid(hwnd, state);
+}
+
+fn start_painting(hwnd: HWND, button: MouseButton, lparam: LPARAM) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    if state.app.is_editing() {
+        state.painting = Some(button);
+        paint_cell(hwnd, state, lparam);
+    }
+}
+
+fn continue_painting(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    // The window does not capture the mouse, so a button released outside it shows up here.
+    let held = match state.painting {
+        Some(MouseButton::Left) => (wparam & MK_LBUTTON) != 0,
+        Some(MouseButton::Right) => (wparam & MK_RBUTTON) != 0,
+        None => return,
+    };
+    if held {
+        paint_cell(hwnd, state, lparam);
+    } else {
+        state.painting = None;
+    }
+}
+
+/// Applies the held mouse button to the cell under the cursor.
+fn paint_cell(hwnd: HWND, state: &mut WindowState, lparam: LPARAM) {
+    let (Some(button), Some(back_buffer)) = (state.painting, &state.back_buffer) else {
+        return;
+    };
+    let (x, y) = cursor_position(lparam);
+    let Some((row, col)) = back_buffer.cell_at(x, y) else {
+        return;
+    };
+    if !state.app.edit_cell(row, col, button) {
+        return;
+    }
+    if let Err(error) = update_changed_cells(hwnd, state, ((row, col), (row, col))) {
+        eprintln!("Unable to update the off-screen grid buffer: {error}");
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    }
+}
+
+/// Client coordinates of the cursor, packed into a mouse message's `lparam` as signed values.
+fn cursor_position(lparam: LPARAM) -> (i32, i32) {
+    let x = (lparam & 0xffff) as u16 as i16;
+    let y = ((lparam >> 16) & 0xffff) as u16 as i16;
+    (i32::from(x), i32::from(y))
 }
 
 /// Shows the native Save or Open dialog for map files. Returns `None` if the user cancels.
@@ -421,11 +522,6 @@ fn choose_map_file(hwnd: HWND, dialog: MapFileDialog) -> Option<PathBuf> {
         .position(|&unit| unit == 0)
         .unwrap_or(FILE_NAME_CAPACITY);
     Some(PathBuf::from(OsString::from_wide(&file_name[..length])))
-}
-
-fn show_placeholder(hwnd: HWND, command: &str) {
-    let message = format!("{command} is not implemented yet.");
-    show_message(hwnd, command, &message, MB_ICONINFORMATION);
 }
 
 fn show_message(hwnd: HWND, title: &str, text: &str, icon: MESSAGEBOX_STYLE) {
@@ -483,9 +579,22 @@ fn rebuild_back_buffer(hwnd: HWND, state: &mut WindowState) -> Result<(), String
         return Ok(());
     }
 
-    let back_buffer = BackBuffer::new(hwnd, width, height, &state.app.buffer)?;
+    let font = legend_font(state.status_bar);
+    let back_buffer = BackBuffer::new(hwnd, width, height, &state.app.buffer, font)?;
     state.back_buffer = Some(back_buffer);
     Ok(())
+}
+
+/// The status bar's font, so the legend matches the status bar below it.
+fn legend_font(status_bar: HWND) -> HGDIOBJ {
+    let font = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(status_bar, WM_GETFONT, 0, 0)
+    } as HGDIOBJ;
+    if font.is_null() {
+        unsafe { GetStockObject(DEFAULT_GUI_FONT) }
+    } else {
+        font
+    }
 }
 
 fn update_changed_cells(
@@ -520,7 +629,7 @@ fn update_changed_cells(
         .back_buffer
         .as_mut()
         .ok_or_else(|| "The off-screen grid buffer is not initialized.".to_owned())?
-        .draw_full(&state.app.buffer)?;
+        .draw_grid(&state.app.buffer)?;
     for rect in dirty_rects {
         unsafe { InvalidateRect(hwnd, &rect, 0) };
     }
@@ -528,7 +637,13 @@ fn update_changed_cells(
 }
 
 impl BackBuffer {
-    fn new(hwnd: HWND, width: i32, height: i32, pixels: &[u32]) -> Result<Self, String> {
+    fn new(
+        hwnd: HWND,
+        width: i32,
+        height: i32,
+        pixels: &[u32],
+        legend_font: HGDIOBJ,
+    ) -> Result<Self, String> {
         let window_dc = unsafe { GetDC(hwnd) };
         if window_dc.is_null() {
             return Err("Unable to acquire the window drawing context.".to_owned());
@@ -563,33 +678,51 @@ impl BackBuffer {
             width,
             height,
         };
-        buffer.draw_full(pixels)?;
+        buffer.draw_legend(legend_font);
+        buffer.draw_grid(pixels)?;
         Ok(buffer)
     }
 
-    fn draw_full(&self, pixels: &[u32]) -> Result<(), String> {
+    /// Height of the area above the legend, where the grid is drawn.
+    fn grid_area_height(&self) -> i32 {
+        (self.height - LEGEND_HEIGHT).max(0)
+    }
+
+    /// Where the grid is drawn: as large as fits above the legend, and centered.
+    fn grid_rect(&self) -> RECT {
+        let area_height = self.grid_area_height();
+        let scale = (self.width as f64 / WIDTH as f64).min(area_height as f64 / HEIGHT as f64);
+        let width = (WIDTH as f64 * scale).round() as i32;
+        let height = (HEIGHT as f64 * scale).round() as i32;
+        let left = (self.width - width) / 2;
+        let top = (area_height - height) / 2;
+        RECT {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+
+    fn draw_grid(&self, pixels: &[u32]) -> Result<(), String> {
         let background_rect = RECT {
             left: 0,
             top: 0,
             right: self.width,
-            bottom: self.height,
+            bottom: self.grid_area_height(),
         };
         unsafe {
             FillRect(self.dc, &background_rect, GetSysColorBrush(COLOR_WINDOW));
         }
 
-        let scale = (self.width as f64 / WIDTH as f64).min(self.height as f64 / HEIGHT as f64);
-        let grid_width = (WIDTH as f64 * scale).round() as i32;
-        let grid_height = (HEIGHT as f64 * scale).round() as i32;
-        let x = (self.width - grid_width) / 2;
-        let y = (self.height - grid_height) / 2;
+        let grid = self.grid_rect();
         if unsafe {
             StretchDIBits(
                 self.dc,
-                x,
-                y,
-                grid_width,
-                grid_height,
+                grid.left,
+                grid.top,
+                grid.right - grid.left,
+                grid.bottom - grid.top,
                 0,
                 0,
                 WIDTH as i32,
@@ -607,13 +740,100 @@ impl BackBuffer {
     }
 
     fn cell_rect(&self, row: usize, col: usize) -> RECT {
-        let (left, top, right, bottom) = AppState::cell_bounds(row, col, self.width, self.height);
+        let (left, top, right, bottom) =
+            AppState::cell_bounds(row, col, self.width, self.grid_area_height());
         RECT {
             left,
             top,
             right,
             bottom,
         }
+    }
+
+    /// Cell drawn under the client point `(x, y)`, if any.
+    fn cell_at(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        let grid = self.grid_rect();
+        AppState::cell_at(
+            f64::from(x),
+            f64::from(y),
+            f64::from(grid.left),
+            f64::from(grid.top),
+            f64::from(grid.right - grid.left),
+            f64::from(grid.bottom - grid.top),
+        )
+    }
+
+    /// Draws the legend panel below the grid: a color sample and a label for each map color.
+    fn draw_legend(&self, font: HGDIOBJ) {
+        let top = self.grid_area_height();
+        let panel = RECT {
+            left: 0,
+            top,
+            right: self.width,
+            bottom: self.height,
+        };
+        let separator = RECT {
+            bottom: top + 1,
+            ..panel
+        };
+        unsafe {
+            FillRect(self.dc, &panel, GetSysColorBrush(COLOR_BTNFACE));
+            FillRect(self.dc, &separator, GetSysColorBrush(COLOR_BTNSHADOW));
+        }
+
+        let previous_font = unsafe { SelectObject(self.dc, font) };
+        unsafe {
+            SetBkMode(self.dc, TRANSPARENT as i32);
+            SetTextColor(self.dc, GetSysColor(COLOR_BTNTEXT));
+        }
+        let swatch_top = top + (self.height - top - LEGEND_SWATCH) / 2;
+        let mut left = LEGEND_SPACING;
+        for (label, color) in LEGEND {
+            let swatch = RECT {
+                left,
+                top: swatch_top,
+                right: left + LEGEND_SWATCH,
+                bottom: swatch_top + LEGEND_SWATCH,
+            };
+            unsafe {
+                let brush = CreateSolidBrush(colorref(color));
+                FillRect(self.dc, &swatch, brush);
+                DeleteObject(brush as HGDIOBJ);
+                FrameRect(self.dc, &swatch, GetStockObject(BLACK_BRUSH) as HBRUSH);
+            }
+
+            let text = wide(label);
+            let text_left = swatch.right + LEGEND_SPACING / 2;
+            let mut text_rect = RECT {
+                left: text_left,
+                top,
+                right: text_left,
+                bottom: self.height,
+            };
+            // Measure the label first, so the next entry starts right after it.
+            unsafe {
+                DrawTextW(
+                    self.dc,
+                    text.as_ptr(),
+                    -1,
+                    &mut text_rect,
+                    DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+                )
+            };
+            text_rect.top = top;
+            text_rect.bottom = self.height;
+            unsafe {
+                DrawTextW(
+                    self.dc,
+                    text.as_ptr(),
+                    -1,
+                    &mut text_rect,
+                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+                )
+            };
+            left = text_rect.right + 2 * LEGEND_SPACING;
+        }
+        unsafe { SelectObject(self.dc, previous_font) };
     }
 }
 
@@ -643,4 +863,10 @@ fn bitmap_info() -> BITMAPINFO {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Converts a `0x00RRGGBB` color, as stored in the grid's pixel buffer, to a GDI `COLORREF`
+/// (`0x00BBGGRR`).
+fn colorref(color: u32) -> COLORREF {
+    ((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff)
 }
