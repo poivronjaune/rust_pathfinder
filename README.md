@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms: Linux and Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#supported-platforms)
 
-A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. You can start a blank map and save or load maps as JSON files. This is an interactive prototype—not yet a route planner—and map editing is still a placeholder.
+A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. You can start a blank map and save or load maps as `.map` files. This is an interactive prototype—not yet a route planner—and map editing is still a placeholder.
 
 ## Features
 
@@ -12,8 +12,8 @@ A small cross-platform Rust desktop prototype for exploring a grid-based map and
 - Resizable 20 × 20 grid with free, obstacle, and unknown terrain
 - Keyboard-controlled vehicle: Up/Down to move, Left/Right to turn
 - Status display showing the vehicle's position and heading
-- File menu to start a blank map and to save and load [map files](#map-files) in JSON
-- Native menus; File → Exit and Map → Edit are still placeholders
+- File menu to start a blank map, save and load [map files](#map-files), and exit
+- Native menus; Map → Edit is still a placeholder
 
 ## Requirements
 
@@ -71,6 +71,8 @@ cargo run
 | Right arrow | Turn clockwise |
 | Escape | Close the application |
 
+You can also close the application with **File → Exit**.
+
 Movement is bounded by the grid edges. The current prototype does not prevent movement into obstacle cells.
 
 ## Map files
@@ -78,12 +80,12 @@ Movement is bounded by the grid edges. The current prototype does not prevent mo
 | File menu command | Action |
 | --- | --- |
 | New | Replace the map with a blank one where every cell is unknown |
-| Save | Save the current map to a JSON file |
+| Save | Save the current map to a `.map` file |
 | Load | Replace the current map with one saved earlier |
 
-Map files store only the terrain: the vehicle keeps its position and heading when you start, save, or load a map. If a file can't be read or isn't a valid 20 × 20 map, an error message is shown and the current map is left unchanged.
+Map files use the `.map` extension and contain JSON. They store only the terrain: the vehicle keeps its position and heading when you start, save, or load a map. If a file can't be read or isn't a valid 20 × 20 map, an error message is shown and the current map is left unchanged.
 
-The format is defined by a [JSON Schema](https://json-schema.org/) (draft 2020-12) in [`schemas/map.schema.json`](schemas/map.schema.json). Saved files reference it through their `$schema` property, so editors such as VS Code can validate them. Each grid row is written on its own line.
+The format is defined by a [JSON Schema](https://json-schema.org/) (draft 2020-12) in [`schemas/map.schema.json`](schemas/map.schema.json). Saved files reference it through their `$schema` property, so editors that open `.map` files as JSON can validate them (in VS Code, add `"files.associations": { "*.map": "json" }` to your settings). Each grid row is written on its own line.
 
 | Property | Description |
 | --- | --- |
@@ -99,7 +101,7 @@ cargo build
 cargo test
 ```
 
-To create an optimized build, run `cargo build --release`. The executable is written under `target/release/` (`my_app` on Linux, `my_app.exe` on Windows).
+To create an optimized build, run `cargo build --release`. The executable is written under `target/release/` (`rust_pathfinder` on Linux, `rust_pathfinder.exe` on Windows).
 
 ## Libraries and dependencies
 
