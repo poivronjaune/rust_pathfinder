@@ -9,10 +9,10 @@ Rust PathFinder
 Desktop prototype for a grid-based backyard mapping and navigation experience.
 
 ### Status
-Interactive prototype with working File menu commands (New, Save, Load, Exit); Map → Edit is still a placeholder.
+Interactive prototype with working File menu commands (New, Save, Load, Exit), mouse-based map editing, and a color legend.
 
 ### Summary
-Rust PathFinder is a small desktop application that displays a 20 x 20 grid and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys and can observe the current row, column, and heading in a status area. The user can also start a blank map and save or load maps as `.map` files. The current implementation does not yet provide map editing, route planning, or autonomous navigation.
+Rust PathFinder is a small desktop application that displays a 20 x 20 grid and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys and can observe the current row, column, and heading in a status area. The user can also edit the map with the mouse, start a blank map, and save or load maps as `.map` files. A legend explains the map colors. The current implementation does not yet provide route planning or autonomous navigation.
 
 ## 2. Problem and opportunity
 
@@ -28,6 +28,8 @@ This prototype exists to validate the interaction model and platform structure b
 - Keep vehicle movement bounded within the map.
 - Present state information in a platform-native status area.
 - Let the user start a blank map and save and reload maps as `.map` files in a documented JSON format.
+- Let the user mark cells as obstacles or unknown terrain with the mouse in an explicit edit mode.
+- Explain the map colors with an on-screen legend.
 - Provide a native desktop shell on both Windows and Linux using the same shared app logic.
 - Establish an extensible Rust foundation for future plotting, map editing, and navigation features.
 
@@ -36,7 +38,7 @@ This prototype exists to validate the interaction model and platform structure b
 The current prototype does not include:
 
 - Real obstacle avoidance or collision handling
-- Map editing
+- Editing tools beyond marking cells as obstacle or unknown (for example free terrain, undo, or brushes)
 - Persistent storage of vehicle state (map files store terrain only)
 - Autonomous route planning or destination selection
 - Real-world navigation physics or scale
@@ -53,7 +55,7 @@ The current prototype does not include:
 
 ### 6.1 Startup
 
-On launch, the application opens a desktop window titled "20 x 20 Grid". The window contains a native menu bar, a central grid visualization, and a status area beneath the grid.
+On launch, the application opens a desktop window titled "20 x 20 Grid". The window contains a native menu bar, a central grid visualization, a legend panel, and a status area at the bottom.
 
 The initial view shows a deterministic sample terrain map and a single vehicle positioned in the bottom-center cell facing upward.
 
@@ -65,7 +67,7 @@ The map is a fixed 20 x 20 matrix. Each cell is rendered with a border and a fil
 - Obstacle terrain: brown
 - Unknown terrain: gray
 
-The map is generated deterministically on startup and is intended as a visual demonstration rather than a user-authored map. The user can replace it with a blank map or a previously saved map from the File menu (see 6.6).
+The map is generated deterministically on startup as a visual demonstration. The user can edit it with the mouse (see 6.7) or replace it with a blank map or a previously saved map from the File menu (see 6.6). A legend explains the colors (see 6.8).
 
 ### 6.3 Vehicle behavior
 
@@ -81,7 +83,7 @@ Movement is clamped to the map edges. Attempted movement beyond the edge leaves 
 
 ### 6.4 Menu experience
 
-The application exposes native File, Map, and About menu groups. File → New, Save, and Load work with map files (see 6.6), and File → Exit closes the application. About opens a native informational dialog. Map → Edit still opens a placeholder informational dialog that represents the future interaction model for a broader product.
+The application exposes native File, Map, and About menu groups. File → New, Save, and Load work with map files (see 6.6), and File → Exit closes the application. About opens a native informational dialog. Map → Edit turns edit mode on and off (see 6.7).
 
 ### 6.5 Status output
 
@@ -92,7 +94,7 @@ The status area reports the current vehicle state as:
 - Column
 - Heading
 
-The displayed state updates after movement or rotation.
+The displayed state updates after movement or rotation. In edit mode, "Editing" and a reminder of the mouse actions replace "Ready".
 
 ### 6.6 Map files
 
@@ -103,6 +105,19 @@ The displayed state updates after movement or rotation.
 - Map files store only the terrain. Starting, saving, or loading a map never moves or turns the vehicle.
 - If a file cannot be written, read, or validated, the application shows an error dialog and keeps the current map.
 - Canceling a dialog leaves everything unchanged.
+
+### 6.7 Map editing
+
+- **Map → Edit** turns edit mode on; selecting it again turns it off. The menu item shows a check mark while edit mode is on.
+- While editing, the grid lines turn orange and the status area starts with "Editing", so the mode is always visible.
+- In edit mode, a left click on a cell makes it an obstacle and a right click makes it unknown. Holding a button while moving the pointer applies the same change to every cell the pointer crosses.
+- Outside edit mode, mouse clicks do not change the map.
+- Editing never moves or turns the vehicle, and the vehicle can still be driven in edit mode. The vehicle stays drawn over its cell, so an edit to that cell shows once the vehicle moves away.
+- Edits are kept in memory until the user saves the map with File → Save.
+
+### 6.8 Legend
+
+A legend panel between the grid and the status area shows a color sample and a label for free, obstacle, and unknown terrain and for the vehicle, using the same colors as the grid.
 
 ## 7. Functional requirements
 
@@ -133,18 +148,19 @@ The displayed state updates after movement or rotation.
 3. The application shall display startup errors to standard error and exit with a non-zero result if it fails to initialize.
 4. Selecting File → Exit shall close the application, including all of its windows.
 
-### FR-5: Menus and placeholder actions
+### FR-5: Menus
 1. The application shall show File, Map, and About menu entries.
 2. File shall include New, Save, Load, and Exit.
 3. Map shall include Edit.
 4. About shall open a native informational dialog directly.
-5. Selecting Map → Edit shall show a placeholder message indicating the action is not implemented yet.
+5. Map → Edit shall turn edit mode on and off as described in FR-8.
 6. File → New, Save, and Load shall behave as described in FR-7, and File → Exit as described in FR-4.
 
 ### FR-6: Status area
 1. The application shall display a status area beneath the grid.
 2. The status area shall report the vehicle's row, column, and heading.
 3. Status text shall update after movement or turning.
+4. In edit mode, the status text shall start with "Editing" and the mouse actions instead of "Ready".
 
 ### FR-7: Map files
 1. File → New shall set every cell of the map to unknown.
@@ -155,6 +171,19 @@ The displayed state updates after movement or rotation.
 6. When a file cannot be written, read, or validated, the application shall show an error dialog naming the file and the problem, and keep the current map.
 7. Canceling the save or open dialog shall leave the map unchanged.
 8. Map files shall use the `.map` extension, and the save and open dialogs shall list `.map` files by default.
+
+### FR-8: Map editing
+1. Map → Edit shall turn edit mode on when it is off and off when it is on, and the menu item shall show a check mark while edit mode is on.
+2. While edit mode is on, the grid lines shall be drawn in a distinct edit color (orange) and the status area shall indicate edit mode (FR-6).
+3. In edit mode, a left click on a cell shall make it an obstacle, and a right click shall make it unknown.
+4. Holding a mouse button while moving the pointer shall apply the same change to every cell the pointer crosses.
+5. Outside edit mode, mouse clicks shall not change the map.
+6. Editing shall not move or turn the vehicle, and the vehicle shall remain drawn over its cell.
+7. File → New and File → Load shall keep the current edit mode.
+
+### FR-9: Legend
+1. The application shall show a legend panel between the grid and the status area.
+2. The legend shall show a color sample and a label for free, obstacle, and unknown terrain and for the vehicle, using the colors drawn on the grid.
 
 ## 8. Non-functional requirements
 
@@ -171,7 +200,7 @@ The app must remain responsive for a fixed-size 20 x 20 grid and a single vehicl
 The app shall keep map, vehicle, rendering, and platform shell logic separated so future capabilities can be added without rewriting the core behavior.
 
 ### NFR-5: Prototype clarity
-The implementation shall make it clear that map-editing, route-planning, and vehicle-state persistence features are not yet included.
+The implementation shall make it clear that route-planning and vehicle-state persistence features are not yet included.
 
 ### NFR-6: Documented map file format
 The map file format shall be defined by a standalone JSON Schema (draft 2020-12) in `schemas/map.schema.json`, separate from the application code. Saved files shall reference the schema through `$schema` and carry a `formatVersion` so the format can evolve, and automated tests shall check that the code and the schema agree.
@@ -185,20 +214,22 @@ The map file format shall be defined by a standalone JSON Schema (draft 2020-12)
 5. Pressing Left or Right rotates the car 90 degrees without moving its position.
 6. Pressing a movement key at the map edge does not move the car outside the grid.
 7. The status area shows the current row, column, and heading and updates after each input.
-8. Selecting Map → Edit opens a native informational placeholder dialog rather than performing an action.
+8. Selecting Map → Edit turns edit mode on (check mark on the menu item, orange grid lines, and "Editing" in the status area), and selecting it again turns edit mode off.
 9. Escape closes the application when the grid has keyboard focus.
 10. The project compiles successfully in the target environment.
 11. Selecting File → New turns every cell unknown without moving or turning the car.
 12. Saving a map to a `.map` file and loading it again restores the same terrain, and the saved file validates against `schemas/map.schema.json`.
 13. Loading a file that cannot be read or is not a valid 20 x 20 map shows an error dialog and leaves the current map unchanged.
 14. Selecting File → Exit closes the application.
+15. In edit mode, left-clicking a cell makes it an obstacle and right-clicking makes it unknown, and dragging with a button held changes every cell crossed. Outside edit mode, clicks do not change the map.
+16. A legend between the grid and the status area shows the free, obstacle, unknown, and vehicle colors.
 
 ## 10. Product decisions and scope boundaries
 
 This prototype intentionally does not decide:
 
 - Whether obstacles should block vehicle movement
-- Whether maps should be editable or imported
+- Whether maps should be imported from other formats
 - Whether route planning should be implemented
 - Whether vehicle state should be saved with maps or persisted between sessions
 - Whether the app will become a full backyard-planning product or remain a visual simulation tool
@@ -207,12 +238,12 @@ This prototype intentionally does not decide:
 
 These items are explicitly out of scope for the current prototype but may be valuable in future milestones:
 
-- Add user-editable terrain maps
+- Extend the map editor (free terrain, undo, larger brushes)
 - Define and implement obstacle collisions
 - Add destination selection and route visualization
 - Add unknown-terrain behavior and pathfinding
 - Persist vehicle state alongside maps
-- Add accessibility improvements and visual legend support
+- Add accessibility improvements
 - Expand the app into a broader navigation and planning product
 
 ## 12. Technical implementation context
@@ -220,32 +251,33 @@ These items are explicitly out of scope for the current prototype but may be val
 This section is intentionally separated from product requirements so the product intent remains clear.
 
 ### Platform architecture
-- Linux: GTK 4-based window, menu bar, keyboard handling, native file chooser, and Cairo rendering
-- Windows: Win32 window, native menu, common Save and Open dialogs, status bar, and GDI rendering
+- Linux: GTK 4-based window, menu bar, keyboard and mouse handling, native file chooser, legend panel built from GTK widgets, and Cairo rendering
+- Windows: Win32 window, native menu, keyboard and mouse handling, common Save and Open dialogs, GDI-drawn legend panel, status bar, and GDI rendering
 
 ### Core logic
 - Shared map generation and grid state live in the Rust application core.
 - Vehicle state and movement rules are managed separately from the OS shell.
 - Rendering is performed from a shared pixel buffer so the app can paint the same visual state across platforms.
+- Edit mode, the mouse editing rules, the mapping from screen points to cells, and the legend entries live in the shared core (`src/app.rs`, `src/render.rs`) so both platforms behave the same.
 - Map files are encoded, decoded, and validated by a shared module (`src/map_file.rs`) built on serde and serde_json. The format itself is defined separately in `schemas/map.schema.json`.
 
 ### Current technical constraints
 - The application is a fixed-size visual prototype.
 - The map is deterministic and generated locally.
 - Maps persist only through explicit File → Save and File → Load; nothing is saved automatically.
-- Map → Edit is placeholder UI only.
 - The repo currently targets Linux and Windows desktop environments.
 
 ## 13. Requirements summary
 
-This product is a minimal visual prototype intended to prove the interaction model: a fixed grid, a single vehicle, native desktop framing, keyboard-driven movement, and saving and loading maps. It is not yet a full navigation application. The PRD is intentionally narrow and should remain so until advanced features are explicitly approved.
+This product is a minimal visual prototype intended to prove the interaction model: a fixed grid, a single vehicle, native desktop framing, keyboard-driven movement, mouse-based map editing, and saving and loading maps. It is not yet a full navigation application. The PRD is intentionally narrow and should remain so until advanced features are explicitly approved.
 
 ## 14. Open questions
 
 - Should obstacle cells eventually block motion, or remain visual-only indicators?
 - Should the application become a map editor, a planner, or a simple simulator?
-- Is the target next milestone route planning or map editing?
-- Should the remaining placeholder menu item (Map → Edit) be implemented or re-scoped before broader feature work begins?
+- Is the target next milestone route planning or richer map editing?
+- Should the editor also mark cells as free, and should it offer undo?
+- Should Escape leave edit mode instead of closing the application?
 - Should File → Exit or closing the window ask before discarding unsaved map changes?
 - Should map files also store the vehicle's position and heading, or support grid sizes other than 20 x 20?
 
