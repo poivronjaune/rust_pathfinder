@@ -4,16 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms: Linux and Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#supported-platforms)
 
-A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. You can start a blank map and save or load maps as `.map` files. This is an interactive prototype—not yet a route planner—and map editing is still a placeholder.
+A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a 20 × 20 grid with sample terrain and a vehicle that you can move and turn using the arrow keys. You can edit the map with the mouse, start a blank map, and save or load maps as `.map` files. This is an interactive prototype—not yet a route planner.
 
 ## Features
 
 - Native desktop window on Linux and Windows
-- Resizable 20 × 20 grid with free, obstacle, and unknown terrain
+- Resizable 20 × 20 grid with free, obstacle, and unknown terrain, and a legend that explains the colors
 - Keyboard-controlled vehicle: Up/Down to move, Left/Right to turn
+- [Map editing](#editing-the-map) with the mouse: left click marks obstacles, right click marks unknown terrain
 - Status display showing the vehicle's position and heading
 - File menu to start a blank map, save and load [map files](#map-files), and exit
-- Native menus; Map → Edit is still a placeholder
+- Native menus
 
 ## Requirements
 
@@ -74,6 +75,21 @@ cargo run
 You can also close the application with **File → Exit**.
 
 Movement is bounded by the grid edges. The current prototype does not prevent movement into obstacle cells.
+
+## Editing the map
+
+Choose **Map → Edit** to turn edit mode on, and choose it again to turn it off. While edit mode is on, the menu item shows a check mark, the grid lines turn orange, and the status bar starts with **Editing**.
+
+| Mouse | Action |
+| --- | --- |
+| Left click | Mark the cell as an obstacle |
+| Right click | Mark the cell as unknown |
+
+Hold a mouse button and move the pointer to paint several cells at once. Clicks do nothing outside edit mode. You can still drive the vehicle while editing; if you edit the cell under the vehicle, the change shows once the vehicle moves away.
+
+Edits are not saved automatically: use **File → Save** to keep them. Escape and **File → Exit** close the application without asking, even in edit mode.
+
+The legend between the map and the status bar shows what each color means: free, obstacle, and unknown terrain, and the vehicle.
 
 ## Map files
 
