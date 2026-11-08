@@ -1,18 +1,18 @@
 use std::ffi::{OsString, c_void};
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BeginPaint, BitBlt, COLOR_BTNFACE,
-    COLOR_BTNSHADOW, COLOR_BTNTEXT, COLOR_WINDOW, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CALCRECT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GDI_ERROR, GetDC,
-    GetStockObject, GetSysColor, GetSysColorBrush, HBITMAP, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
-    PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor, StretchDIBits,
-    TRANSPARENT,
+    COLOR_BTNSHADOW, COLOR_BTNTEXT, COLOR_WINDOW, COLORONCOLOR, CreateCompatibleBitmap,
+    CreateCompatibleDC, CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CALCRECT,
+    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
+    FrameRect, GDI_ERROR, GetDC, GetStockObject, GetSysColor, GetSysColorBrush, HALFTONE, HBITMAP,
+    HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
+    SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::{
@@ -22,29 +22,42 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 use windows_sys::Win32::UI::Controls::{
     ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, SB_SETTEXTW,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CheckMenuItem, CreateMenu, CreatePopupMenu,
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMenu,
-    GetMessageW, HMENU, IDC_ARROW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-    MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW,
-    MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    AdjustWindowRectEx, AppendMenuW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    CheckMenuItem, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu,
+    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMenu, GetMenuItemCount,
+    GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, HMENU, IDC_ARROW,
+    IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFONT,
+    WM_SIZE, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_DLGMODALFRAME, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
-use crate::app::{AppState, MouseButton, VehicleKey};
+use crate::app::{AppState, HEADINGS, MapSettings, MouseButton, VehicleKey};
 use crate::config::{
-    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, HEIGHT, WIDTH,
+    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, MAX_GRID_SIZE,
+    MIN_GRID_SIZE,
 };
 use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
+use crate::recent::{MAX_RECENT_FILES, RecentFiles};
 use crate::render::LEGEND;
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
 const ID_FILE_LOAD: usize = 1003;
 const ID_FILE_EXIT: usize = 1004;
+const ID_FILE_CLEAR_RECENT: usize = 1005;
+/// Commands of the recent files listed in the File menu, newest first.
+const ID_FILE_RECENT_FIRST: usize = 1011;
+const ID_FILE_RECENT_LAST: usize = ID_FILE_RECENT_FIRST + MAX_RECENT_FILES - 1;
 const ID_MAP_EDIT: usize = 1101;
+const ID_MAP_GRID_SIZE: usize = 1102;
 const ID_ABOUT: usize = 1201;
 const STATUS_HEIGHT: i32 = 24;
 /// Height of the legend panel between the grid and the status bar.
@@ -60,8 +73,37 @@ const WINDOW_CLASS: &str = "PathPlannerGridWindow";
 /// Size of the file name buffer used by the Save and Load dialogs, in UTF-16 code units.
 const FILE_NAME_CAPACITY: usize = 4096;
 
+const SETTINGS_CLASS: &str = "PathPlannerGridSizeDialog";
+/// Client area of the Grid Size dialog.
+const SETTINGS_WIDTH: i32 = 300;
+const SETTINGS_HEIGHT: i32 = 262;
+/// The OK and Cancel button commands; `IsDialogMessageW` also sends them for Enter and Escape.
+const ID_OK: usize = 1;
+const ID_CANCEL: usize = 2;
+const ID_ROWS: usize = 101;
+const ID_COLUMNS: usize = 102;
+const ID_START_ROW: usize = 103;
+const ID_START_COLUMN: usize = 104;
+const ID_HEADING: usize = 105;
+// Edit, combo box and button styles and messages, as defined by the Windows SDK.
+const ES_AUTOHSCROLL: u32 = 0x0080;
+const ES_NUMBER: u32 = 0x2000;
+const CBS_DROPDOWNLIST: u32 = 0x0003;
+const BS_PUSHBUTTON: u32 = 0x0000;
+const BS_DEFPUSHBUTTON: u32 = 0x0001;
+const EM_SETSEL: u32 = 0x00B1;
+const EM_SETLIMITTEXT: u32 = 0x00C5;
+const CB_ADDSTRING: u32 = 0x0143;
+const CB_GETCURSEL: u32 = 0x0147;
+const CB_SETCURSEL: u32 = 0x014E;
+/// Low word of `WM_ACTIVATE`'s `wparam` when the window is deactivated.
+const WA_INACTIVE: usize = 0;
+
 struct WindowState {
     app: AppState,
+    recent: RecentFiles,
+    /// The File menu, rebuilt whenever the recent files change.
+    file_menu: HMENU,
     status_bar: HWND,
     back_buffer: Option<BackBuffer>,
     /// Button pressed on the window in edit mode; moving the mouse while it is held paints cells.
@@ -74,6 +116,19 @@ struct BackBuffer {
     previous_bitmap: HGDIOBJ,
     width: i32,
     height: i32,
+}
+
+/// State of the Grid Size dialog while it is open.
+struct SettingsDialog {
+    owner: HWND,
+    initial: MapSettings,
+    /// Rows, columns, start row and start column fields, in that order.
+    fields: [HWND; 4],
+    heading: HWND,
+    /// Control that had the focus when another window was activated, such as an error message.
+    focus: HWND,
+    result: Option<MapSettings>,
+    done: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -107,23 +162,37 @@ pub(super) fn run() -> Result<(), String> {
         return Err("Unable to register the main window class.".to_owned());
     }
 
-    let menu = create_menu()?;
+    let settings_class = wide(SETTINGS_CLASS);
+    let mut settings_window_class: WNDCLASSW = unsafe { zeroed() };
+    settings_window_class.lpfnWndProc = Some(settings_proc);
+    settings_window_class.hInstance = instance;
+    settings_window_class.hCursor = unsafe { LoadCursorW(null_mut(), IDC_ARROW) };
+    settings_window_class.hbrBackground = unsafe { GetSysColorBrush(COLOR_BTNFACE) };
+    settings_window_class.lpszClassName = settings_class.as_ptr();
+    if unsafe { RegisterClassW(&settings_window_class) } == 0 {
+        return Err("Unable to register the Grid Size dialog class.".to_owned());
+    }
+
+    let (menu, file_menu) = create_menu()?;
+    let recent = RecentFiles::load();
+    fill_file_menu(file_menu, &recent)?;
+    let app = AppState::new();
+    let title = wide(&app.title());
     let mut state = Box::new(WindowState {
-        app: AppState::new(),
+        app,
+        recent,
+        file_menu,
         status_bar: null_mut(),
         back_buffer: None,
         painting: None,
     });
     let state_pointer = (&mut *state) as *mut WindowState;
-    let title = wide("20 x 20 Grid");
     let hwnd = unsafe {
         CreateWindowExW(
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            WS_OVERLAPPEDWINDOW
-                | WS_VISIBLE
-                | windows_sys::Win32::UI::WindowsAndMessaging::WS_CLIPCHILDREN,
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             480,
@@ -158,7 +227,8 @@ pub(super) fn run() -> Result<(), String> {
     result
 }
 
-fn create_menu() -> Result<HMENU, String> {
+/// Creates the menu bar. Returns it with the File menu, which `fill_file_menu` fills.
+fn create_menu() -> Result<(HMENU, HMENU), String> {
     let menu_bar = unsafe { CreateMenu() };
     let file_menu = unsafe { CreatePopupMenu() };
     let map_menu = unsafe { CreatePopupMenu() };
@@ -166,21 +236,11 @@ fn create_menu() -> Result<HMENU, String> {
         return Err("Unable to create the application menus.".to_owned());
     }
 
-    let commands = [
-        ("New", ID_FILE_NEW),
-        ("Save", ID_FILE_SAVE),
-        ("Load", ID_FILE_LOAD),
-        ("Exit", ID_FILE_EXIT),
-    ];
-    for (label, command) in commands {
+    for (label, command) in [("Edit", ID_MAP_EDIT), ("Grid Size...", ID_MAP_GRID_SIZE)] {
         let label = wide(label);
-        if unsafe { AppendMenuW(file_menu, MF_STRING, command, label.as_ptr()) } == 0 {
-            return Err("Unable to add a File menu command.".to_owned());
+        if unsafe { AppendMenuW(map_menu, MF_STRING, command, label.as_ptr()) } == 0 {
+            return Err("Unable to add a Map menu command.".to_owned());
         }
-    }
-    let edit_label = wide("Edit");
-    if unsafe { AppendMenuW(map_menu, MF_STRING, ID_MAP_EDIT, edit_label.as_ptr()) } == 0 {
-        return Err("Unable to add the Map menu command.".to_owned());
     }
 
     let file_label = wide("File");
@@ -192,7 +252,43 @@ fn create_menu() -> Result<HMENU, String> {
     {
         return Err("Unable to assemble the application menu bar.".to_owned());
     }
-    Ok(menu_bar)
+    Ok((menu_bar, file_menu))
+}
+
+/// Fills the File menu with the map commands, the recent files numbered the way Word and Excel
+/// list them, and Exit.
+fn fill_file_menu(menu: HMENU, recent: &RecentFiles) -> Result<(), String> {
+    while unsafe { GetMenuItemCount(menu) } > 0 {
+        if unsafe { DeleteMenu(menu, 0, MF_BYPOSITION) } == 0 {
+            return Err("Unable to update the File menu.".to_owned());
+        }
+    }
+
+    let append = |command: usize, label: &str| {
+        let label = wide(label);
+        unsafe { AppendMenuW(menu, MF_STRING, command, label.as_ptr()) } != 0
+    };
+    let separator = || unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) } != 0;
+
+    let mut appended =
+        append(ID_FILE_NEW, "New") && append(ID_FILE_SAVE, "Save") && append(ID_FILE_LOAD, "Load");
+    if !recent.paths().is_empty() {
+        appended &= separator();
+        for index in 0..recent.paths().len() {
+            if let Some(label) = recent.label(index) {
+                // `&` marks the access key in a menu, so a literal ampersand is doubled.
+                let text = format!("&{} {}", index + 1, label.replace('&', "&&"));
+                appended &= append(ID_FILE_RECENT_FIRST + index, &text);
+            }
+        }
+        appended &= separator() && append(ID_FILE_CLEAR_RECENT, "Clear Recent Files");
+    }
+    appended &= separator() && append(ID_FILE_EXIT, "Exit");
+    if appended {
+        Ok(())
+    } else {
+        Err("Unable to add a File menu command.".to_owned())
+    }
 }
 
 unsafe extern "system" fn window_proc(
@@ -203,11 +299,10 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = unsafe {
-                &*(lparam as *const windows_sys::Win32::UI::WindowsAndMessaging::CREATESTRUCTW)
-            };
+            let create = unsafe { &*(lparam as *const CREATESTRUCTW) };
             unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize) };
-            1
+            // The default handling sets the window title.
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
         WM_CREATE => {
             let status_class = wide("msctls_statusbar32");
@@ -220,9 +315,7 @@ unsafe extern "system" fn window_proc(
                     0,
                     status_class.as_ptr(),
                     null(),
-                    windows_sys::Win32::UI::WindowsAndMessaging::WS_CHILD
-                        | windows_sys::Win32::UI::WindowsAndMessaging::WS_VISIBLE
-                        | windows_sys::Win32::UI::Controls::SBARS_SIZEGRIP,
+                    WS_CHILD | WS_VISIBLE | windows_sys::Win32::UI::Controls::SBARS_SIZEGRIP,
                     0,
                     0,
                     0,
@@ -244,7 +337,7 @@ unsafe extern "system" fn window_proc(
                 resize_status(hwnd, state.status_bar);
                 if let Err(error) = rebuild_back_buffer(hwnd, state) {
                     eprintln!("Unable to resize the off-screen grid buffer: {error}");
-                    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                    unsafe { DestroyWindow(hwnd) };
                 } else {
                     unsafe { InvalidateRect(hwnd, null(), 0) };
                 }
@@ -256,10 +349,15 @@ unsafe extern "system" fn window_proc(
                 ID_FILE_NEW => new_map(hwnd),
                 ID_FILE_SAVE => save_map(hwnd),
                 ID_FILE_LOAD => load_map(hwnd),
+                ID_FILE_CLEAR_RECENT => clear_recent_files(hwnd),
+                command @ ID_FILE_RECENT_FIRST..=ID_FILE_RECENT_LAST => {
+                    open_recent_file(hwnd, command - ID_FILE_RECENT_FIRST);
+                }
                 ID_FILE_EXIT => {
-                    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                    unsafe { DestroyWindow(hwnd) };
                 }
                 ID_MAP_EDIT => toggle_editing(hwnd),
+                ID_MAP_GRID_SIZE => change_grid_size(hwnd),
                 ID_ABOUT => show_about(hwnd),
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
             }
@@ -270,7 +368,7 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             if wparam == 0x1b {
-                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                unsafe { DestroyWindow(hwnd) };
                 return 0;
             }
             let key = match wparam {
@@ -281,11 +379,13 @@ unsafe extern "system" fn window_proc(
                 _ => None,
             };
             if let (Some(key), Some(state)) = (key, unsafe { state_mut(hwnd) }) {
-                let changed_cells = state.app.handle_vehicle_key(key);
-                update_status(state);
-                if let Err(error) = update_changed_cells(hwnd, state, changed_cells) {
-                    eprintln!("Unable to update the off-screen grid buffer: {error}");
-                    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+                // The keys do nothing in edit mode.
+                if let Some(changed_cells) = state.app.handle_vehicle_key(key) {
+                    update_status(state);
+                    if let Err(error) = update_changed_cells(hwnd, state, changed_cells) {
+                        eprintln!("Unable to update the off-screen grid buffer: {error}");
+                        unsafe { DestroyWindow(hwnd) };
+                    }
                 }
             }
             0
@@ -325,9 +425,7 @@ unsafe extern "system" fn window_proc(
 }
 
 unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut WindowState> {
-    let pointer = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
-    } as *mut WindowState;
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowState;
     unsafe { pointer.as_mut() }
 }
 
@@ -352,20 +450,13 @@ fn resize_status(hwnd: HWND, status_bar: HWND) {
 
 fn update_status(state: &WindowState) {
     let text = wide(&state.app.status_text());
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
-            state.status_bar,
-            SB_SETTEXTW,
-            0,
-            text.as_ptr() as LPARAM,
-        )
-    };
+    unsafe { SendMessageW(state.status_bar, SB_SETTEXTW, 0, text.as_ptr() as LPARAM) };
 }
 
 fn new_map(hwnd: HWND) {
     if let Some(state) = unsafe { state_mut(hwnd) } {
         state.app.new_map();
-        refresh_grid(hwnd, state);
+        show_new_map(hwnd, state);
     }
 }
 
@@ -373,38 +464,88 @@ fn save_map(hwnd: HWND) {
     let Some(path) = choose_map_file(hwnd, MapFileDialog::Save) else {
         return;
     };
-    let result = match unsafe { state_mut(hwnd) } {
-        Some(state) => state.app.save_map(&path),
-        None => return,
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
     };
-    if let Err(error) = result {
-        show_message(hwnd, "Save", &error, MB_ICONERROR);
+    match state.app.save_map(&path) {
+        Ok(()) => remember_file(state, &path),
+        Err(error) => show_message(hwnd, "Save", &error, MB_ICONERROR),
     }
 }
 
 fn load_map(hwnd: HWND) {
-    let Some(path) = choose_map_file(hwnd, MapFileDialog::Load) else {
-        return;
+    if let Some(path) = choose_map_file(hwnd, MapFileDialog::Load) {
+        open_map_file(hwnd, &path);
+    }
+}
+
+/// Opens the recent file listed at `index` in the File menu.
+fn open_recent_file(hwnd: HWND, index: usize) {
+    let path = match unsafe { state_mut(hwnd) } {
+        Some(state) => state.recent.get(index).map(Path::to_path_buf),
+        None => None,
     };
+    if let Some(path) = path {
+        open_map_file(hwnd, &path);
+    }
+}
+
+/// Loads a map file and moves it to the top of the recent files. A recent file that no longer
+/// exists is removed from the list.
+fn open_map_file(hwnd: HWND, path: &Path) {
     let Some(state) = (unsafe { state_mut(hwnd) }) else {
         return;
     };
-    if let Err(error) = state.app.load_map(&path) {
-        show_message(hwnd, "Load", &error, MB_ICONERROR);
-    } else {
-        refresh_grid(hwnd, state);
+    match state.app.load_map(path) {
+        Ok(()) => {
+            remember_file(state, path);
+            show_new_map(hwnd, state);
+        }
+        Err(mut error) => {
+            if !path.exists() && state.recent.remove(path) {
+                update_recent_menu(state);
+                error.push_str("\n\nThe file was removed from the recent files list.");
+            }
+            show_message(hwnd, "Load", &error, MB_ICONERROR);
+        }
     }
+}
+
+fn clear_recent_files(hwnd: HWND) {
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.recent.clear();
+        update_recent_menu(state);
+    }
+}
+
+fn remember_file(state: &mut WindowState, path: &Path) {
+    state.recent.add(path);
+    update_recent_menu(state);
+}
+
+fn update_recent_menu(state: &WindowState) {
+    if let Err(error) = fill_file_menu(state.file_menu, &state.recent) {
+        eprintln!("{error}");
+    }
+}
+
+/// Shows a replaced or resized map: the window title, the status bar and the whole grid.
+fn show_new_map(hwnd: HWND, state: &WindowState) {
+    let title = wide(&state.app.title());
+    unsafe { SetWindowTextW(hwnd, title.as_ptr()) };
+    update_status(state);
+    refresh_grid(hwnd, state);
 }
 
 /// Repaints the whole grid after the map has been replaced.
 fn refresh_grid(hwnd: HWND, state: &WindowState) {
     let redrawn = match &state.back_buffer {
-        Some(back_buffer) => back_buffer.draw_grid(&state.app.buffer),
+        Some(back_buffer) => back_buffer.draw_grid(&state.app),
         None => Ok(()),
     };
     if let Err(error) = redrawn {
         eprintln!("Unable to redraw the off-screen grid buffer: {error}");
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+        unsafe { DestroyWindow(hwnd) };
     } else {
         unsafe { InvalidateRect(hwnd, null(), 0) };
     }
@@ -421,6 +562,277 @@ fn toggle_editing(hwnd: HWND) {
     unsafe { CheckMenuItem(GetMenu(hwnd), ID_MAP_EDIT as u32, MF_BYCOMMAND | check) };
     update_status(state);
     refresh_grid(hwnd, state);
+}
+
+/// Map → Grid Size: asks for the size of the map and where the car starts, then applies them.
+fn change_grid_size(hwnd: HWND) {
+    let Some(initial) = (unsafe { state_mut(hwnd) }).map(|state| state.app.settings()) else {
+        return;
+    };
+    let Some(settings) = show_settings_dialog(hwnd, initial) else {
+        return;
+    };
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.app.apply_settings(settings);
+        show_new_map(hwnd, state);
+    }
+}
+
+/// Shows the modal Grid Size dialog. Returns the accepted settings, or `None` if it is canceled.
+fn show_settings_dialog(owner: HWND, initial: MapSettings) -> Option<MapSettings> {
+    let dialog = Box::into_raw(Box::new(SettingsDialog {
+        owner,
+        initial,
+        fields: [null_mut(); 4],
+        heading: null_mut(),
+        focus: null_mut(),
+        result: None,
+        done: false,
+    }));
+    let class_name = wide(SETTINGS_CLASS);
+    let title = wide("Grid Size");
+    let style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    let mut frame = RECT {
+        left: 0,
+        top: 0,
+        right: SETTINGS_WIDTH,
+        bottom: SETTINGS_HEIGHT,
+    };
+    unsafe { AdjustWindowRectEx(&mut frame, style, 0, WS_EX_DLGMODALFRAME) };
+    let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+    let mut owner_rect = RECT::default();
+    unsafe { GetWindowRect(owner, &mut owner_rect) };
+    let x = owner_rect.left + (owner_rect.right - owner_rect.left - width) / 2;
+    let y = owner_rect.top + (owner_rect.bottom - owner_rect.top - height) / 2;
+
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            class_name.as_ptr(),
+            title.as_ptr(),
+            style,
+            x,
+            y,
+            width,
+            height,
+            owner,
+            null_mut(),
+            GetModuleHandleW(null()),
+            dialog.cast(),
+        )
+    };
+    if hwnd.is_null() {
+        unsafe { drop(Box::from_raw(dialog)) };
+        show_message(
+            owner,
+            "Grid Size",
+            "Unable to open the Grid Size dialog.",
+            MB_ICONERROR,
+        );
+        return None;
+    }
+
+    unsafe {
+        EnableWindow(owner, 0);
+        ShowWindow(hwnd, SW_SHOW);
+        let first_field = (*dialog).fields[0];
+        SetFocus(first_field);
+        SendMessageW(first_field, EM_SETSEL, 0, -1);
+    }
+
+    // A message loop of its own keeps the dialog modal while it is open.
+    let mut message: MSG = unsafe { zeroed() };
+    while !unsafe { (*dialog).done } {
+        let received = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
+        if received == 0 {
+            // Leave the quit request for the main message loop.
+            unsafe { PostQuitMessage(message.wParam as i32) };
+            break;
+        }
+        if received == -1 {
+            break;
+        }
+        if unsafe { IsDialogMessageW(hwnd, &message) } == 0 {
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+    if !unsafe { (*dialog).done } {
+        unsafe {
+            EnableWindow(owner, 1);
+            DestroyWindow(hwnd);
+        }
+    }
+    let dialog = unsafe { Box::from_raw(dialog) };
+    dialog.result
+}
+
+unsafe extern "system" fn settings_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            let create = unsafe { &*(lparam as *const CREATESTRUCTW) };
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize) };
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
+        WM_CREATE => match unsafe { dialog_mut(hwnd) } {
+            Some(dialog) => {
+                create_settings_controls(hwnd, dialog);
+                0
+            }
+            None => -1,
+        },
+        WM_COMMAND => {
+            match wparam & 0xffff {
+                ID_OK => accept_settings(hwnd),
+                ID_CANCEL => close_settings(hwnd),
+                _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+            }
+            0
+        }
+        WM_ACTIVATE => {
+            // Like a dialog box, give the focus back to the control that had it.
+            if let Some(dialog) = unsafe { dialog_mut(hwnd) } {
+                if wparam & 0xffff == WA_INACTIVE {
+                    let focused = unsafe { GetFocus() };
+                    if !focused.is_null() {
+                        dialog.focus = focused;
+                    }
+                } else if !dialog.focus.is_null() {
+                    unsafe { SetFocus(dialog.focus) };
+                    return 0;
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
+        WM_CLOSE => {
+            close_settings(hwnd);
+            0
+        }
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    }
+}
+
+unsafe fn dialog_mut(hwnd: HWND) -> Option<&'static mut SettingsDialog> {
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut SettingsDialog;
+    unsafe { pointer.as_mut() }
+}
+
+/// Creates the Grid Size dialog's labels, fields and buttons, filled with the current settings.
+fn create_settings_controls(hwnd: HWND, dialog: &mut SettingsDialog) {
+    let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+    let control = |class: &str,
+                   text: &str,
+                   style: u32,
+                   ex_style: u32,
+                   bounds: [i32; 4],
+                   id: usize| {
+        let class = wide(class);
+        let text = wide(text);
+        let [x, y, width, height] = bounds;
+        let control = unsafe {
+            CreateWindowExW(
+                ex_style,
+                class.as_ptr(),
+                text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | style,
+                x,
+                y,
+                width,
+                height,
+                hwnd,
+                id as HMENU,
+                GetModuleHandleW(null()),
+                null(),
+            )
+        };
+        if !control.is_null() {
+            unsafe { SendMessageW(control, WM_SETFONT, font as WPARAM, 0) };
+        }
+        control
+    };
+
+    let initial = dialog.initial;
+    control("STATIC", "Grid size", 0, 0, [12, 12, 276, 18], 0);
+    control("STATIC", "Car start", 0, 0, [12, 100, 276, 18], 0);
+    let size_hint = format!("({MIN_GRID_SIZE} to {MAX_GRID_SIZE})");
+    let fields = [
+        ("Rows:", initial.rows, size_hint.as_str(), 34, ID_ROWS),
+        ("Columns:", initial.cols, size_hint.as_str(), 62, ID_COLUMNS),
+        ("Row:", initial.start.row + 1, "(1 to rows)", 122, ID_START_ROW),
+        ("Column:", initial.start.col + 1, "(1 to columns)", 150, ID_START_COLUMN),
+    ];
+    for (index, (label, value, hint, top, id)) in fields.into_iter().enumerate() {
+        control("STATIC", label, 0, 0, [24, top + 3, 96, 18], 0);
+        let style = WS_TABSTOP | ES_NUMBER | ES_AUTOHSCROLL;
+        let field = control(
+            "EDIT",
+            &value.to_string(),
+            style,
+            WS_EX_CLIENTEDGE,
+            [124, top, 56, 22],
+            id,
+        );
+        unsafe { SendMessageW(field, EM_SETLIMITTEXT, 3, 0) };
+        control("STATIC", hint, 0, 0, [188, top + 3, 100, 18], 0);
+        dialog.fields[index] = field;
+    }
+
+    control("STATIC", "Heading:", 0, 0, [24, 181, 96, 18], 0);
+    let style = WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST;
+    let heading = control("COMBOBOX", "", style, 0, [124, 178, 100, 160], ID_HEADING);
+    for (name, _) in HEADINGS {
+        let name = wide(name);
+        unsafe { SendMessageW(heading, CB_ADDSTRING, 0, name.as_ptr() as LPARAM) };
+    }
+    unsafe { SendMessageW(heading, CB_SETCURSEL, initial.heading_index(), 0) };
+    dialog.heading = heading;
+
+    let ok_style = WS_TABSTOP | BS_DEFPUSHBUTTON;
+    control("BUTTON", "OK", ok_style, 0, [120, 222, 80, 26], ID_OK);
+    let cancel_style = WS_TABSTOP | BS_PUSHBUTTON;
+    control("BUTTON", "Cancel", cancel_style, 0, [208, 222, 80, 26], ID_CANCEL);
+}
+
+/// OK button: closes the dialog with the entered settings, or explains what to correct.
+fn accept_settings(hwnd: HWND) {
+    let Some(dialog) = (unsafe { dialog_mut(hwnd) }) else {
+        return;
+    };
+    let [rows, cols, start_row, start_col] = dialog.fields.map(window_text);
+    let heading = unsafe { SendMessageW(dialog.heading, CB_GETCURSEL, 0, 0) };
+    let heading = usize::try_from(heading).unwrap_or(usize::MAX);
+    match MapSettings::parse(&rows, &cols, &start_row, &start_col, heading) {
+        Ok(settings) => {
+            dialog.result = Some(settings);
+            close_settings(hwnd);
+        }
+        Err(error) => show_message(hwnd, "Grid Size", &error, MB_ICONERROR),
+    }
+}
+
+/// Closes the Grid Size dialog. The owner is enabled first so that it gets the focus back.
+fn close_settings(hwnd: HWND) {
+    let Some(dialog) = (unsafe { dialog_mut(hwnd) }) else {
+        return;
+    };
+    dialog.done = true;
+    unsafe {
+        EnableWindow(dialog.owner, 1);
+        DestroyWindow(hwnd);
+    }
+}
+
+fn window_text(hwnd: HWND) -> String {
+    let mut text = [0u16; 64];
+    let length = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
+    String::from_utf16_lossy(&text[..length.max(0) as usize])
 }
 
 fn start_painting(hwnd: HWND, button: MouseButton, lparam: LPARAM) {
@@ -456,7 +868,7 @@ fn paint_cell(hwnd: HWND, state: &mut WindowState, lparam: LPARAM) {
         return;
     };
     let (x, y) = cursor_position(lparam);
-    let Some((row, col)) = back_buffer.cell_at(x, y) else {
+    let Some((row, col)) = back_buffer.cell_at(&state.app, x, y) else {
         return;
     };
     if !state.app.edit_cell(row, col, button) {
@@ -464,7 +876,7 @@ fn paint_cell(hwnd: HWND, state: &mut WindowState, lparam: LPARAM) {
     }
     if let Err(error) = update_changed_cells(hwnd, state, ((row, col), (row, col))) {
         eprintln!("Unable to update the off-screen grid buffer: {error}");
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+        unsafe { DestroyWindow(hwnd) };
     }
 }
 
@@ -580,16 +992,14 @@ fn rebuild_back_buffer(hwnd: HWND, state: &mut WindowState) -> Result<(), String
     }
 
     let font = legend_font(state.status_bar);
-    let back_buffer = BackBuffer::new(hwnd, width, height, &state.app.buffer, font)?;
+    let back_buffer = BackBuffer::new(hwnd, width, height, &state.app, font)?;
     state.back_buffer = Some(back_buffer);
     Ok(())
 }
 
 /// The status bar's font, so the legend matches the status bar below it.
 fn legend_font(status_bar: HWND) -> HGDIOBJ {
-    let font = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(status_bar, WM_GETFONT, 0, 0)
-    } as HGDIOBJ;
+    let font = unsafe { SendMessageW(status_bar, WM_GETFONT, 0, 0) } as HGDIOBJ;
     if font.is_null() {
         unsafe { GetStockObject(DEFAULT_GUI_FONT) }
     } else {
@@ -599,37 +1009,27 @@ fn legend_font(status_bar: HWND) -> HGDIOBJ {
 
 fn update_changed_cells(
     hwnd: HWND,
-    state: &mut WindowState,
+    state: &WindowState,
     changed: ((usize, usize), (usize, usize)),
 ) -> Result<(), String> {
-    if state.back_buffer.is_none() {
+    let Some(back_buffer) = &state.back_buffer else {
         return Ok(());
-    }
+    };
 
-    let cells = [changed.0, changed.1];
-    let mut dirty_rects = Vec::with_capacity(cells.len());
-    {
-        let Some(back_buffer) = state.back_buffer.as_ref() else {
-            return Err("The off-screen grid buffer is not initialized.".to_owned());
-        };
-        let mut last_cell = None;
-        for (row, col) in cells {
-            if last_cell == Some((row, col)) {
-                continue;
-            }
-            last_cell = Some((row, col));
-            let rect = back_buffer.cell_rect(row, col);
-            if rect.right > rect.left && rect.bottom > rect.top {
-                dirty_rects.push(rect);
-            }
+    let mut dirty_rects = Vec::with_capacity(2);
+    let mut last_cell = None;
+    for (row, col) in [changed.0, changed.1] {
+        if last_cell == Some((row, col)) {
+            continue;
+        }
+        last_cell = Some((row, col));
+        let rect = back_buffer.cell_rect(&state.app, row, col);
+        if rect.right > rect.left && rect.bottom > rect.top {
+            dirty_rects.push(rect);
         }
     }
 
-    state
-        .back_buffer
-        .as_mut()
-        .ok_or_else(|| "The off-screen grid buffer is not initialized.".to_owned())?
-        .draw_grid(&state.app.buffer)?;
+    back_buffer.draw_grid(&state.app)?;
     for rect in dirty_rects {
         unsafe { InvalidateRect(hwnd, &rect, 0) };
     }
@@ -641,7 +1041,7 @@ impl BackBuffer {
         hwnd: HWND,
         width: i32,
         height: i32,
-        pixels: &[u32],
+        app: &AppState,
         legend_font: HGDIOBJ,
     ) -> Result<Self, String> {
         let window_dc = unsafe { GetDC(hwnd) };
@@ -679,7 +1079,7 @@ impl BackBuffer {
             height,
         };
         buffer.draw_legend(legend_font);
-        buffer.draw_grid(pixels)?;
+        buffer.draw_grid(app)?;
         Ok(buffer)
     }
 
@@ -689,11 +1089,12 @@ impl BackBuffer {
     }
 
     /// Where the grid is drawn: as large as fits above the legend, and centered.
-    fn grid_rect(&self) -> RECT {
+    fn grid_rect(&self, app: &AppState) -> RECT {
         let area_height = self.grid_area_height();
-        let scale = (self.width as f64 / WIDTH as f64).min(area_height as f64 / HEIGHT as f64);
-        let width = (WIDTH as f64 * scale).round() as i32;
-        let height = (HEIGHT as f64 * scale).round() as i32;
+        let (map_width, map_height) = (app.pixel_width() as f64, app.pixel_height() as f64);
+        let scale = (self.width as f64 / map_width).min(area_height as f64 / map_height);
+        let width = (map_width * scale).round() as i32;
+        let height = (map_height * scale).round() as i32;
         let left = (self.width - width) / 2;
         let top = (area_height - height) / 2;
         RECT {
@@ -704,7 +1105,7 @@ impl BackBuffer {
         }
     }
 
-    fn draw_grid(&self, pixels: &[u32]) -> Result<(), String> {
+    fn draw_grid(&self, app: &AppState) -> Result<(), String> {
         let background_rect = RECT {
             left: 0,
             top: 0,
@@ -715,7 +1116,19 @@ impl BackBuffer {
             FillRect(self.dc, &background_rect, GetSysColorBrush(COLOR_WINDOW));
         }
 
-        let grid = self.grid_rect();
+        let grid = self.grid_rect(app);
+        let (map_width, map_height) = (app.pixel_width() as i32, app.pixel_height() as i32);
+        // When a large map is shrunk, halftone blends the dropped pixels instead of losing the
+        // grid lines.
+        let mode = if grid.right - grid.left < map_width {
+            HALFTONE
+        } else {
+            COLORONCOLOR
+        };
+        unsafe {
+            SetStretchBltMode(self.dc, mode);
+            SetBrushOrgEx(self.dc, 0, 0, null_mut());
+        }
         if unsafe {
             StretchDIBits(
                 self.dc,
@@ -725,23 +1138,23 @@ impl BackBuffer {
                 grid.bottom - grid.top,
                 0,
                 0,
-                WIDTH as i32,
-                HEIGHT as i32,
-                pixels.as_ptr().cast::<c_void>(),
-                &bitmap_info(),
+                map_width,
+                map_height,
+                app.buffer.as_ptr().cast::<c_void>(),
+                &bitmap_info(map_width, map_height),
                 DIB_RGB_COLORS,
                 SRCCOPY,
             )
         } == GDI_ERROR
         {
-            return Err("GDI failed to draw the initial grid.".to_owned());
+            return Err("GDI failed to draw the grid.".to_owned());
         }
         Ok(())
     }
 
-    fn cell_rect(&self, row: usize, col: usize) -> RECT {
+    fn cell_rect(&self, app: &AppState, row: usize, col: usize) -> RECT {
         let (left, top, right, bottom) =
-            AppState::cell_bounds(row, col, self.width, self.grid_area_height());
+            app.cell_bounds(row, col, self.width, self.grid_area_height());
         RECT {
             left,
             top,
@@ -751,9 +1164,9 @@ impl BackBuffer {
     }
 
     /// Cell drawn under the client point `(x, y)`, if any.
-    fn cell_at(&self, x: i32, y: i32) -> Option<(usize, usize)> {
-        let grid = self.grid_rect();
-        AppState::cell_at(
+    fn cell_at(&self, app: &AppState, x: i32, y: i32) -> Option<(usize, usize)> {
+        let grid = self.grid_rect(app);
+        app.cell_at(
             f64::from(x),
             f64::from(y),
             f64::from(grid.left),
@@ -847,12 +1260,13 @@ impl Drop for BackBuffer {
     }
 }
 
-fn bitmap_info() -> BITMAPINFO {
+/// Describes a top-down 32-bit pixel buffer of `width` by `height` pixels.
+fn bitmap_info(width: i32, height: i32) -> BITMAPINFO {
     let mut bitmap: BITMAPINFO = unsafe { zeroed() };
     bitmap.bmiHeader = BITMAPINFOHEADER {
         biSize: size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: WIDTH as i32,
-        biHeight: -(HEIGHT as i32),
+        biWidth: width,
+        biHeight: -height,
         biPlanes: 1,
         biBitCount: 32,
         biCompression: BI_RGB,
