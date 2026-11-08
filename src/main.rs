@@ -4,6 +4,7 @@ mod config;
 mod grid;
 mod map_file;
 mod platform;
+mod recent;
 mod render;
 
 fn main() {
