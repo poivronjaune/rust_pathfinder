@@ -266,7 +266,7 @@ fn fill_file_menu(menu: HMENU, recent: &RecentFiles) -> Result<(), String> {
 
     let append = |command: usize, label: &str| {
         let label = wide(label);
-        unsafe { AppendMenuW(menu, MF_STRING, command, label.as_ptr()) } != 0
+        (unsafe { AppendMenuW(menu, MF_STRING, command, label.as_ptr()) }) != 0
     };
     let separator = || unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) } != 0;
 
