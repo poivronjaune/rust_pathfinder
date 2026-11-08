@@ -1,7 +1,6 @@
 use crate::car::{Car, Direction};
 use crate::config::{
     BORDER, BORDER_WIDTH, CAR_BLACK, CAR_RED, CELL_SIZE, EDIT_BORDER, FREE, OBSTACLE, UNKNOWN,
-    WIDTH,
 };
 use crate::grid::{Cell, Grid};
 
@@ -13,17 +12,27 @@ pub(crate) const LEGEND: [(&str, u32); 4] = [
     ("Vehicle", CAR_RED),
 ];
 
-/// Draws the whole map. In edit mode the grid lines use the edit color.
+/// Draws the whole map into `buffer`, which holds `grid.rows * CELL_SIZE` lines of
+/// `grid.cols * CELL_SIZE` pixels. In edit mode the grid lines use the edit color.
 pub(crate) fn draw(buffer: &mut [u32], grid: &Grid, car: Car, editing: bool) {
+    let width = grid.cols * CELL_SIZE;
     for (row, cells) in grid.cells.iter().enumerate() {
         for (col, cell) in cells.iter().enumerate() {
-            draw_cell(buffer, col, row, *cell, editing);
+            draw_cell(buffer, width, col, row, *cell, editing);
         }
     }
-    draw_car_cell(buffer, car);
+    draw_car_cell(buffer, width, car);
 }
 
-pub(crate) fn draw_cell(buffer: &mut [u32], col: usize, row: usize, cell: Cell, editing: bool) {
+/// Draws one cell into a buffer whose lines are `width` pixels long.
+pub(crate) fn draw_cell(
+    buffer: &mut [u32],
+    width: usize,
+    col: usize,
+    row: usize,
+    cell: Cell,
+    editing: bool,
+) {
     let fill = cell_color(cell);
     let border = if editing { EDIT_BORDER } else { BORDER };
 
@@ -36,7 +45,7 @@ pub(crate) fn draw_cell(buffer: &mut [u32], col: usize, row: usize, cell: Cell, 
                 || !(BORDER_WIDTH..CELL_SIZE - BORDER_WIDTH).contains(&dy);
 
             let color = if on_border { border } else { fill };
-            buffer[(y0 + dy) * WIDTH + (x0 + dx)] = color;
+            buffer[(y0 + dy) * width + (x0 + dx)] = color;
         }
     }
 }
@@ -49,13 +58,14 @@ fn cell_color(cell: Cell) -> u32 {
     }
 }
 
-pub(crate) fn draw_car_cell(buffer: &mut [u32], car: Car) {
+/// Draws the car over its cell in a buffer whose lines are `width` pixels long.
+pub(crate) fn draw_car_cell(buffer: &mut [u32], width: usize, car: Car) {
     let x0 = car.col * CELL_SIZE;
     let y0 = car.row * CELL_SIZE;
 
     for dy in 0..CELL_SIZE {
         for dx in 0..CELL_SIZE {
-            buffer[(y0 + dy) * WIDTH + (x0 + dx)] = CAR_RED;
+            buffer[(y0 + dy) * width + (x0 + dx)] = CAR_RED;
         }
     }
 
@@ -63,40 +73,40 @@ pub(crate) fn draw_car_cell(buffer: &mut [u32], car: Car) {
         Direction::Up => {
             for row in 0..(CELL_SIZE / 2) {
                 let y = y0 + row;
-                let width = (row * 2 + 1).min(CELL_SIZE - 2);
-                let x_start = x0 + CELL_SIZE / 2 - width / 2;
-                for x in x_start..(x_start + width) {
-                    buffer[y * WIDTH + x] = CAR_BLACK;
+                let triangle = (row * 2 + 1).min(CELL_SIZE - 2);
+                let x_start = x0 + CELL_SIZE / 2 - triangle / 2;
+                for x in x_start..(x_start + triangle) {
+                    buffer[y * width + x] = CAR_BLACK;
                 }
             }
         }
         Direction::Right => {
             for col in 0..(CELL_SIZE / 2) {
                 let x = x0 + CELL_SIZE - 1 - col;
-                let height = (col * 2 + 1).min(CELL_SIZE - 2);
-                let y_start = y0 + CELL_SIZE / 2 - height / 2;
-                for y in y_start..(y_start + height) {
-                    buffer[y * WIDTH + x] = CAR_BLACK;
+                let triangle = (col * 2 + 1).min(CELL_SIZE - 2);
+                let y_start = y0 + CELL_SIZE / 2 - triangle / 2;
+                for y in y_start..(y_start + triangle) {
+                    buffer[y * width + x] = CAR_BLACK;
                 }
             }
         }
         Direction::Down => {
             for row in 0..(CELL_SIZE / 2) {
                 let y = y0 + CELL_SIZE - 1 - row;
-                let width = (row * 2 + 1).min(CELL_SIZE - 2);
-                let x_start = x0 + CELL_SIZE / 2 - width / 2;
-                for x in x_start..(x_start + width) {
-                    buffer[y * WIDTH + x] = CAR_BLACK;
+                let triangle = (row * 2 + 1).min(CELL_SIZE - 2);
+                let x_start = x0 + CELL_SIZE / 2 - triangle / 2;
+                for x in x_start..(x_start + triangle) {
+                    buffer[y * width + x] = CAR_BLACK;
                 }
             }
         }
         Direction::Left => {
             for col in 0..(CELL_SIZE / 2) {
                 let x = x0 + col;
-                let height = (col * 2 + 1).min(CELL_SIZE - 2);
-                let y_start = y0 + CELL_SIZE / 2 - height / 2;
-                for y in y_start..(y_start + height) {
-                    buffer[y * WIDTH + x] = CAR_BLACK;
+                let triangle = (col * 2 + 1).min(CELL_SIZE - 2);
+                let y_start = y0 + CELL_SIZE / 2 - triangle / 2;
+                for y in y_start..(y_start + triangle) {
+                    buffer[y * width + x] = CAR_BLACK;
                 }
             }
         }
