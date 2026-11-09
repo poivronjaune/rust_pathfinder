@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::CLEAR_RADIUS;
+use crate::simulator::config::CLEAR_RADIUS;
 
 /// Terrain of one grid cell. The serialized names are part of the map file format
 /// (`schemas/map.schema.json`).
@@ -147,7 +147,7 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::{Cell, Grid};
-    use crate::config::{CLEAR_RADIUS, DEFAULT_GRID_SIZE};
+    use crate::simulator::config::{CLEAR_RADIUS, DEFAULT_GRID_SIZE};
 
     const SIZE: usize = DEFAULT_GRID_SIZE;
 
