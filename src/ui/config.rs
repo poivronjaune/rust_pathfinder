@@ -6,14 +6,9 @@ pub(crate) const APP_AUTHOR: &str = "poivronjaune";
 pub(crate) const APP_COPYRIGHT: &str = "Copyright (c) 2026 poivronjaune - MIT License";
 pub(crate) const APP_WEBSITE: &str = "https://github.com/poivronjaune/rust_pathfinder";
 
-/// Rows and columns of the map shown at startup.
-pub(crate) const DEFAULT_GRID_SIZE: usize = 20;
-pub(crate) const MIN_GRID_SIZE: usize = 2;
-pub(crate) const MAX_GRID_SIZE: usize = 100;
+/// Width and height of a cell in the drawn map, in pixels, before it is scaled to the window.
 pub(crate) const CELL_SIZE: usize = 20;
 pub(crate) const BORDER_WIDTH: usize = 1;
-/// Radius (in cells) of the free area generated around the car.
-pub(crate) const CLEAR_RADIUS: usize = 4;
 
 pub(crate) const FREE: u32 = 0x00DFF0E7;
 pub(crate) const OBSTACLE: u32 = 0x00B0A494;
