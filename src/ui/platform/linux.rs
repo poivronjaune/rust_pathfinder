@@ -14,14 +14,15 @@ use gtk4::{
     PopoverMenuBar, ResponseType, Separator, Statusbar, Window,
 };
 
-use crate::app::{AppState, HEADINGS, MapSettings, MouseButton, VehicleKey};
-use crate::config::{
-    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, CELL_SIZE,
-    DEFAULT_GRID_SIZE, MAX_GRID_SIZE, MIN_GRID_SIZE,
+use crate::simulator::{
+    Command, DEFAULT_FILE_NAME, DEFAULT_GRID_SIZE, FILE_EXTENSION, MAX_GRID_SIZE, MIN_GRID_SIZE,
 };
-use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
-use crate::recent::RecentFiles;
-use crate::render::LEGEND;
+use crate::ui::app::{AppState, HEADINGS, MapSettings, MouseButton};
+use crate::ui::config::{
+    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, CELL_SIZE,
+};
+use crate::ui::recent::RecentFiles;
+use crate::ui::render::LEGEND;
 
 /// Size the map area asks for: a map of the default size drawn at its natural size. Other maps
 /// are scaled to fit.
@@ -512,20 +513,16 @@ fn install_vehicle_keys(ui: &Rc<Ui>) {
         }
         press_keys.borrow_mut().push(key);
 
-        let vehicle_key = match key {
-            gdk::Key::Up => Some(VehicleKey::Forward),
-            gdk::Key::Down => Some(VehicleKey::Reverse),
-            gdk::Key::Left => Some(VehicleKey::TurnLeft),
-            gdk::Key::Right => Some(VehicleKey::TurnRight),
+        let command = match key {
+            gdk::Key::Up => Some(Command::Forward),
+            gdk::Key::Down => Some(Command::Reverse),
+            gdk::Key::Left => Some(Command::TurnLeft),
+            gdk::Key::Right => Some(Command::TurnRight),
             _ => None,
         };
-        if let Some(vehicle_key) = vehicle_key {
+        if let Some(command) = command {
             // The keys do nothing in edit mode.
-            let handled = press_ui
-                .state
-                .borrow_mut()
-                .handle_vehicle_key(vehicle_key)
-                .is_some();
+            let handled = press_ui.state.borrow_mut().drive(command).is_some();
             if handled {
                 press_ui.update_status();
                 press_ui.drawing_area.queue_draw();
