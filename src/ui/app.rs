@@ -1,18 +1,10 @@
 use std::path::Path;
 
-use crate::car::{Car, Direction};
-use crate::config::{CELL_SIZE, DEFAULT_GRID_SIZE, MAX_GRID_SIZE, MIN_GRID_SIZE};
-use crate::grid::{Cell, Grid};
-use crate::map_file::{self, MapData};
-use crate::render;
-
-#[derive(Clone, Copy)]
-pub(crate) enum VehicleKey {
-    Forward,
-    Reverse,
-    TurnLeft,
-    TurnRight,
-}
+use crate::simulator::{
+    Car, Cell, Command, Direction, MAX_GRID_SIZE, MIN_GRID_SIZE, Outcome, Simulation,
+};
+use crate::ui::config::CELL_SIZE;
+use crate::ui::render;
 
 /// Mouse buttons that edit the map: the left button marks obstacles and the right button marks
 /// unknown terrain.
@@ -106,13 +98,12 @@ impl MapSettings {
     }
 }
 
+/// What the window shows: the simulation, drawn into a pixel buffer, and whether the map is being
+/// edited.
 pub(crate) struct AppState {
     /// The map drawn as `pixel_height()` lines of `pixel_width()` pixels.
     pub(crate) buffer: Vec<u32>,
-    grid: Grid,
-    car: Car,
-    /// Where the car starts on this map. It is saved with the map.
-    start: Car,
+    simulation: Simulation,
     editing: bool,
     /// Whether an obstacle stopped the last move.
     blocked: bool,
@@ -120,13 +111,9 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub(crate) fn new() -> Self {
-        let start = Car::start_for(DEFAULT_GRID_SIZE, DEFAULT_GRID_SIZE);
-        let grid = Grid::backyard(DEFAULT_GRID_SIZE, DEFAULT_GRID_SIZE, start.row, start.col);
         let mut state = Self {
             buffer: Vec::new(),
-            grid,
-            car: start,
-            start,
+            simulation: Simulation::new(),
             editing: false,
             blocked: false,
         };
@@ -136,98 +123,79 @@ impl AppState {
 
     #[cfg(test)]
     pub(crate) fn rows(&self) -> usize {
-        self.grid.rows
+        self.simulation.grid().rows
     }
 
     #[cfg(test)]
     pub(crate) fn cols(&self) -> usize {
-        self.grid.cols
+        self.simulation.grid().cols
     }
 
     pub(crate) fn pixel_width(&self) -> usize {
-        self.grid.cols * CELL_SIZE
+        self.simulation.grid().cols * CELL_SIZE
     }
 
     pub(crate) fn pixel_height(&self) -> usize {
-        self.grid.rows * CELL_SIZE
+        self.simulation.grid().rows * CELL_SIZE
     }
 
     /// Window title, which shows the size of the map.
     pub(crate) fn title(&self) -> String {
-        format!("{} x {} Grid", self.grid.rows, self.grid.cols)
+        let grid = self.simulation.grid();
+        format!("{} x {} Grid", grid.rows, grid.cols)
     }
 
     pub(crate) fn settings(&self) -> MapSettings {
+        let grid = self.simulation.grid();
         MapSettings {
-            rows: self.grid.rows,
-            cols: self.grid.cols,
-            start: self.start,
+            rows: grid.rows,
+            cols: grid.cols,
+            start: self.simulation.start(),
         }
     }
 
-    /// Moves or turns the car. Obstacles block the car, and the keys are ignored in edit mode.
-    /// Returns the cells the car left and entered, or `None` when the key was ignored.
-    pub(crate) fn handle_vehicle_key(
-        &mut self,
-        key: VehicleKey,
-    ) -> Option<((usize, usize), (usize, usize))> {
+    /// Moves or turns the car, unless the map is in edit mode. Returns the cells the car left and
+    /// entered, or `None` when the command was ignored.
+    pub(crate) fn drive(&mut self, command: Command) -> Option<((usize, usize), (usize, usize))> {
         if self.editing {
             return None;
         }
-        let previous = (self.car.row, self.car.col);
-        self.blocked = false;
-        match key {
-            VehicleKey::Forward | VehicleKey::Reverse => {
-                let forward = matches!(key, VehicleKey::Forward);
-                let target = self
-                    .car
-                    .next_position(forward, self.grid.rows, self.grid.cols);
-                if let Some((row, col)) = target {
-                    if self.grid.cells[row][col] == Cell::Obstacle {
-                        self.blocked = true;
-                    } else {
-                        (self.car.row, self.car.col) = (row, col);
-                    }
-                }
-            }
-            VehicleKey::TurnLeft => self.car.turn_left(),
-            VehicleKey::TurnRight => self.car.turn_right(),
-        }
-        let current = (self.car.row, self.car.col);
+        let previous = self.simulation.car();
+        self.blocked = self.simulation.drive(command) == Outcome::Blocked;
+        let car = self.simulation.car();
 
         let width = self.pixel_width();
         render::draw_cell(
             &mut self.buffer,
             width,
-            previous.1,
-            previous.0,
-            self.grid.cells[previous.0][previous.1],
+            previous.col,
+            previous.row,
+            self.simulation.grid().cells[previous.row][previous.col],
             self.editing,
         );
-        render::draw_car_cell(&mut self.buffer, width, self.car);
+        render::draw_car_cell(&mut self.buffer, width, car);
 
-        Some((previous, current))
+        Some(((previous.row, previous.col), (car.row, car.col)))
     }
 
     /// Replaces the map with one of the same size where every cell is unknown. The car stays
     /// where it is.
     pub(crate) fn new_map(&mut self) {
-        self.set_grid(Grid::unknown(self.grid.rows, self.grid.cols));
+        self.simulation.new_map();
+        self.show_replaced_map();
     }
 
     /// Saves the map with its size and car start.
     pub(crate) fn save_map(&self, path: &Path) -> Result<(), String> {
-        map_file::save(&self.grid, self.start, path)
+        self.simulation.save_map(path)
     }
 
     /// Replaces the map with the one saved at `path` and puts the car at the map's start (the
     /// bottom-center cell, facing up, for files without one). The current map is kept if the file
     /// cannot be loaded.
     pub(crate) fn load_map(&mut self, path: &Path) -> Result<(), String> {
-        let MapData { grid, start } = map_file::load(path)?;
-        self.start = start.unwrap_or_else(|| Car::start_for(grid.rows, grid.cols));
-        self.car = self.start;
-        self.set_grid(grid);
+        self.simulation.load_map(path)?;
+        self.show_replaced_map();
         Ok(())
     }
 
@@ -235,20 +203,14 @@ impl AppState {
     /// top-left corner and new cells are unknown. `settings` must come from `MapSettings`'s
     /// constructors, which keep the start on the map.
     pub(crate) fn apply_settings(&mut self, settings: MapSettings) {
-        let mut grid = self.grid.resized(settings.rows, settings.cols);
-        let start = settings.start;
-        // The car cannot start inside an obstacle.
-        let start_cell = &mut grid.cells[start.row][start.col];
-        if *start_cell == Cell::Obstacle {
-            *start_cell = Cell::Free;
-        }
-        self.start = start;
-        self.car = start;
-        self.set_grid(grid);
+        self.simulation
+            .resize(settings.rows, settings.cols, settings.start);
+        self.show_replaced_map();
     }
 
-    fn set_grid(&mut self, grid: Grid) {
-        self.grid = grid;
+    /// Redraws the whole map after it was replaced or resized. The last move no longer counts as
+    /// blocked.
+    fn show_replaced_map(&mut self) {
         self.blocked = false;
         self.redraw();
     }
@@ -258,7 +220,12 @@ impl AppState {
         let pixels = self.pixel_width() * self.pixel_height();
         self.buffer.clear();
         self.buffer.resize(pixels, 0);
-        render::draw(&mut self.buffer, &self.grid, self.car, self.editing);
+        render::draw(
+            &mut self.buffer,
+            self.simulation.grid(),
+            self.simulation.car(),
+            self.editing,
+        );
     }
 
     pub(crate) fn is_editing(&self) -> bool {
@@ -279,16 +246,12 @@ impl AppState {
             MouseButton::Left => Cell::Obstacle,
             MouseButton::Right => Cell::Unknown,
         };
-        let terrain = &mut self.grid.cells;
-        let Some(current) = terrain.get_mut(row).and_then(|cells| cells.get_mut(col)) else {
-            return false;
-        };
-        if !self.editing || *current == cell {
+        if !self.editing || !self.simulation.set_cell(row, col, cell) {
             return false;
         }
-        *current = cell;
         // The car is drawn over its own cell, so that cell looks the same until the car moves.
-        if (row, col) != (self.car.row, self.car.col) {
+        let car = self.simulation.car();
+        if (row, col) != (car.row, car.col) {
             let width = self.pixel_width();
             render::draw_cell(&mut self.buffer, width, col, row, cell, self.editing);
         }
@@ -303,14 +266,15 @@ impl AppState {
         } else {
             "Ready"
         };
+        let car = self.simulation.car();
         let heading = HEADINGS
             .iter()
-            .find(|&&(_, direction)| direction == self.car.direction)
+            .find(|&&(_, direction)| direction == car.direction)
             .map_or("", |&(name, _)| name);
         format!(
             "{mode}  |  Row: {}  Column: {}  Heading: {heading}",
-            self.car.row + 1,
-            self.car.col + 1
+            car.row + 1,
+            car.col + 1
         )
     }
 
@@ -349,7 +313,8 @@ impl AppState {
         width: f64,
         height: f64,
     ) -> Option<(usize, usize)> {
-        let (rows, cols) = (self.grid.rows as f64, self.grid.cols as f64);
+        let grid = self.simulation.grid();
+        let (rows, cols) = (grid.rows as f64, grid.cols as f64);
         let col = ((x - left) / width * cols).floor();
         let row = ((y - top) / height * rows).floor();
         let inside = (0.0..rows).contains(&row) && (0.0..cols).contains(&col);
@@ -359,11 +324,10 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, HEADINGS, MapSettings, MouseButton, VehicleKey};
-    use crate::car::{Car, Direction};
-    use crate::config::{BORDER, CELL_SIZE, EDIT_BORDER, MAX_GRID_SIZE};
-    use crate::grid::Cell;
-    use crate::render;
+    use super::{AppState, HEADINGS, MapSettings, MouseButton};
+    use crate::simulator::{Car, Cell, Command, Direction, MAX_GRID_SIZE};
+    use crate::ui::config::{BORDER, CELL_SIZE, EDIT_BORDER};
+    use crate::ui::render;
 
     /// A state whose map is blank, so tests do not depend on the random sample map.
     fn blank_state() -> AppState {
@@ -374,15 +338,26 @@ mod tests {
 
     fn expected_buffer(state: &AppState) -> Vec<u32> {
         let mut expected = vec![0; state.pixel_width() * state.pixel_height()];
-        render::draw(&mut expected, &state.grid, state.car, state.editing);
+        render::draw(
+            &mut expected,
+            state.simulation.grid(),
+            state.simulation.car(),
+            state.editing,
+        );
         expected
+    }
+
+    /// Row and column of the car.
+    fn car_cell(state: &AppState) -> (usize, usize) {
+        let car = state.simulation.car();
+        (car.row, car.col)
     }
 
     #[test]
     fn movement_updates_only_the_previous_and_current_cells() {
         let mut state = blank_state();
         let previous_buffer = state.buffer.clone();
-        let changed = state.handle_vehicle_key(VehicleKey::Forward).unwrap();
+        let changed = state.drive(Command::Forward).unwrap();
 
         assert_eq!(changed.0, (19, 10));
         assert_eq!(changed.1, (18, 10));
@@ -393,7 +368,7 @@ mod tests {
     fn turning_updates_only_the_current_cell() {
         let mut state = blank_state();
         let previous_buffer = state.buffer.clone();
-        let changed = state.handle_vehicle_key(VehicleKey::TurnRight).unwrap();
+        let changed = state.drive(Command::TurnRight).unwrap();
 
         assert_eq!(changed.0, changed.1);
         assert_cells_changed_only(&state, &previous_buffer, &[changed.1]);
@@ -402,39 +377,32 @@ mod tests {
     #[test]
     fn obstacles_block_the_car_both_ways() {
         let mut state = blank_state();
-        state.car = Car {
-            row: 10,
-            col: 10,
-            direction: Direction::Up,
-        };
-        state.grid.cells[9][10] = Cell::Obstacle;
-        state.grid.cells[11][10] = Cell::Obstacle;
+        state.apply_settings(MapSettings::from_values(20, 20, 11, 11, 0).unwrap());
+        state.simulation.set_cell(9, 10, Cell::Obstacle);
+        state.simulation.set_cell(11, 10, Cell::Obstacle);
         state.redraw();
         let before = state.buffer.clone();
 
-        for key in [VehicleKey::Forward, VehicleKey::Reverse] {
-            assert_eq!(state.handle_vehicle_key(key), Some(((10, 10), (10, 10))));
-            assert_eq!((state.car.row, state.car.col), (10, 10));
+        for command in [Command::Forward, Command::Reverse] {
+            assert_eq!(state.drive(command), Some(((10, 10), (10, 10))));
+            assert_eq!(car_cell(&state), (10, 10));
             assert!(state.status_text().starts_with("Blocked"));
             assert!(state.buffer == before);
         }
 
-        state.handle_vehicle_key(VehicleKey::TurnRight);
+        state.drive(Command::TurnRight);
         assert!(state.status_text().starts_with("Ready"));
-        assert_eq!(
-            state.handle_vehicle_key(VehicleKey::Forward),
-            Some(((10, 10), (10, 11)))
-        );
+        assert_eq!(state.drive(Command::Forward), Some(((10, 10), (10, 11))));
     }
 
     #[test]
     fn unknown_and_free_cells_do_not_block_the_car() {
         let mut state = blank_state();
-        state.grid.cells[18][10] = Cell::Free;
-        state.handle_vehicle_key(VehicleKey::Forward);
-        state.handle_vehicle_key(VehicleKey::Forward);
+        state.simulation.set_cell(18, 10, Cell::Free);
+        state.drive(Command::Forward);
+        state.drive(Command::Forward);
 
-        assert_eq!((state.car.row, state.car.col), (17, 10));
+        assert_eq!(car_cell(&state), (17, 10));
         assert!(state.status_text().starts_with("Ready"));
     }
 
@@ -442,36 +410,37 @@ mod tests {
     fn car_keys_are_ignored_in_edit_mode() {
         let mut state = blank_state();
         state.set_editing(true);
-        let (car, before) = (state.car, state.buffer.clone());
+        let (car, before) = (state.simulation.car(), state.buffer.clone());
 
-        for key in [
-            VehicleKey::Forward,
-            VehicleKey::Reverse,
-            VehicleKey::TurnLeft,
-            VehicleKey::TurnRight,
+        for command in [
+            Command::Forward,
+            Command::Reverse,
+            Command::TurnLeft,
+            Command::TurnRight,
         ] {
-            assert_eq!(state.handle_vehicle_key(key), None);
+            assert_eq!(state.drive(command), None);
         }
-        assert_eq!(state.car, car);
+        assert_eq!(state.simulation.car(), car);
         assert!(state.buffer == before);
 
         state.set_editing(false);
-        assert!(state.handle_vehicle_key(VehicleKey::TurnLeft).is_some());
+        assert!(state.drive(Command::TurnLeft).is_some());
     }
 
     #[test]
     fn new_map_marks_every_cell_unknown_and_keeps_the_size_and_the_car() {
         let mut state = AppState::new();
         state.apply_settings(MapSettings::from_values(6, 9, 6, 5, 0).unwrap());
-        state.handle_vehicle_key(VehicleKey::TurnRight);
-        state.handle_vehicle_key(VehicleKey::Forward);
-        let car = state.car;
+        state.drive(Command::TurnRight);
+        state.drive(Command::Forward);
+        let car = state.simulation.car();
 
         state.new_map();
 
         assert_eq!((state.rows(), state.cols()), (6, 9));
-        assert!(state.grid.cells.iter().flatten().all(|&cell| cell == Cell::Unknown));
-        assert_eq!(state.car, car);
+        let cells = &state.simulation.grid().cells;
+        assert!(cells.iter().flatten().all(|&cell| cell == Cell::Unknown));
+        assert_eq!(state.simulation.car(), car);
         assert!(state.buffer == expected_buffer(&state));
     }
 
@@ -485,8 +454,8 @@ mod tests {
         state.set_editing(true);
         state.edit_cell(0, 11, MouseButton::Left);
         state.set_editing(false);
-        let (grid, buffer) = (state.grid.clone(), state.buffer.clone());
-        state.handle_vehicle_key(VehicleKey::Forward);
+        let (grid, buffer) = (state.simulation.grid().clone(), state.buffer.clone());
+        state.drive(Command::Forward);
 
         let saved = state.save_map(&path);
         state.apply_settings(MapSettings::from_values(20, 20, 20, 11, 0).unwrap());
@@ -495,9 +464,9 @@ mod tests {
 
         saved.unwrap();
         loaded.unwrap();
-        assert_eq!(state.grid, grid);
+        assert_eq!(state.simulation.grid(), &grid);
         assert_eq!(state.settings(), settings);
-        assert_eq!(state.car, settings.start);
+        assert_eq!(state.simulation.car(), settings.start);
         assert!(state.buffer == buffer);
     }
 
@@ -507,19 +476,18 @@ mod tests {
             .join("rust_pathfinder_missing_folder")
             .join("missing.map");
         let mut state = AppState::new();
-        let (grid, car, buffer) = (state.grid.clone(), state.car, state.buffer.clone());
+        let (simulation, buffer) = (state.simulation.clone(), state.buffer.clone());
 
         assert!(state.load_map(&path).is_err());
-        assert_eq!(state.grid, grid);
-        assert_eq!(state.car, car);
+        assert_eq!(state.simulation, simulation);
         assert!(state.buffer == buffer);
     }
 
     #[test]
     fn grid_size_settings_resize_the_map_and_move_the_car_to_its_start() {
         let mut state = blank_state();
-        state.grid.cells[0][0] = Cell::Obstacle;
-        state.grid.cells[1][2] = Cell::Obstacle;
+        state.simulation.set_cell(0, 0, Cell::Obstacle);
+        state.simulation.set_cell(1, 2, Cell::Obstacle);
         let settings = MapSettings::from_values(5, 8, 2, 3, 1).unwrap();
 
         state.apply_settings(settings);
@@ -533,10 +501,10 @@ mod tests {
             col: 2,
             direction: Direction::Right,
         };
-        assert_eq!(state.car, start);
-        assert_eq!(state.grid.cells[0][0], Cell::Obstacle);
+        assert_eq!(state.simulation.car(), start);
+        assert_eq!(state.simulation.grid().cells[0][0], Cell::Obstacle);
         // The start cell is cleared so the car does not start inside an obstacle.
-        assert_eq!(state.grid.cells[1][2], Cell::Free);
+        assert_eq!(state.simulation.grid().cells[1][2], Cell::Free);
         assert!(state.buffer == expected_buffer(&state));
         assert!(state.status_text().contains("Row: 2  Column: 3  Heading: Right"));
     }
@@ -582,17 +550,17 @@ mod tests {
     fn mouse_buttons_edit_cells_only_in_edit_mode() {
         let mut state = blank_state();
         assert!(!state.edit_cell(0, 0, MouseButton::Left));
-        assert_eq!(state.grid.cells[0][0], Cell::Unknown);
+        assert_eq!(state.simulation.grid().cells[0][0], Cell::Unknown);
 
         state.set_editing(true);
         let before = state.buffer.clone();
         assert!(state.edit_cell(0, 0, MouseButton::Left));
-        assert_eq!(state.grid.cells[0][0], Cell::Obstacle);
+        assert_eq!(state.simulation.grid().cells[0][0], Cell::Obstacle);
         assert_cells_changed_only(&state, &before, &[(0, 0)]);
         assert!(!state.edit_cell(0, 0, MouseButton::Left));
 
         assert!(state.edit_cell(0, 0, MouseButton::Right));
-        assert_eq!(state.grid.cells[0][0], Cell::Unknown);
+        assert_eq!(state.simulation.grid().cells[0][0], Cell::Unknown);
         assert!(state.buffer == before);
         assert!(!state.edit_cell(state.rows(), 0, MouseButton::Left));
         assert!(!state.edit_cell(0, state.cols(), MouseButton::Left));
@@ -602,11 +570,11 @@ mod tests {
     fn editing_the_car_cell_keeps_the_car_on_top() {
         let mut state = AppState::new();
         state.set_editing(true);
-        let (row, col) = (state.car.row, state.car.col);
+        let (row, col) = car_cell(&state);
         let before = state.buffer.clone();
 
         assert!(state.edit_cell(row, col, MouseButton::Left));
-        assert_eq!(state.grid.cells[row][col], Cell::Obstacle);
+        assert_eq!(state.simulation.grid().cells[row][col], Cell::Obstacle);
         assert!(state.buffer == before);
     }
 
