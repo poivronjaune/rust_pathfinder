@@ -1,8 +1,7 @@
-use crate::car::{Car, Direction};
-use crate::config::{
+use crate::simulator::{Car, Cell, Direction, Grid};
+use crate::ui::config::{
     BORDER, BORDER_WIDTH, CAR_BLACK, CAR_RED, CELL_SIZE, EDIT_BORDER, FREE, OBSTACLE, UNKNOWN,
 };
-use crate::grid::{Cell, Grid};
 
 /// Colors explained by the legend, in display order.
 pub(crate) const LEGEND: [(&str, u32); 4] = [
@@ -116,7 +115,7 @@ pub(crate) fn draw_car_cell(buffer: &mut [u32], width: usize, car: Car) {
 #[cfg(test)]
 mod tests {
     use super::{LEGEND, cell_color};
-    use crate::grid::Cell;
+    use crate::simulator::Cell;
 
     #[test]
     fn legend_explains_every_terrain_color() {
