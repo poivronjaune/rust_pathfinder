@@ -5,9 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::car::{Car, Direction};
-use crate::config::{MAX_GRID_SIZE, MIN_GRID_SIZE};
-use crate::grid::{Cell, Grid};
+use crate::simulator::{Car, Cell, Direction, Grid, MAX_GRID_SIZE, MIN_GRID_SIZE};
 
 /// `$id` of `schemas/map.schema.json`, written into saved maps so editors can validate them.
 const SCHEMA_URL: &str =
@@ -180,11 +178,11 @@ mod tests {
         DEFAULT_FILE_NAME, FILE_EXTENSION, FORMAT_VERSION, SCHEMA_URL, SUPPORTED_VERSIONS,
         from_json, to_json,
     };
-    use crate::car::{Car, Direction};
-    use crate::config::{DEFAULT_GRID_SIZE, MAX_GRID_SIZE, MIN_GRID_SIZE};
-    use crate::grid::{Cell, Grid};
+    use crate::simulator::{
+        Car, Cell, DEFAULT_GRID_SIZE, Direction, Grid, MAX_GRID_SIZE, MIN_GRID_SIZE,
+    };
 
-    const SCHEMA: &str = include_str!("../schemas/map.schema.json");
+    const SCHEMA: &str = include_str!("../../schemas/map.schema.json");
     const SIZE: usize = DEFAULT_GRID_SIZE;
 
     fn start() -> Car {
