@@ -307,13 +307,14 @@ This section is intentionally separated from product requirements so the product
 - Windows: Win32 window, native menu (rebuilt when the recent files change), keyboard and mouse handling, common Save and Open dialogs, modal Grid Size window built from standard controls, GDI-drawn legend panel, status bar, and GDI rendering
 
 ### Core logic
-- Shared map generation and grid state live in the Rust application core.
-- Vehicle state and movement rules are managed separately from the OS shell.
-- Rendering is performed from a shared pixel buffer so the app can paint the same visual state across platforms.
-- Edit mode, the mouse editing rules, the mapping from screen points to cells, and the legend entries live in the shared core (`src/app.rs`, `src/render.rs`) so both platforms behave the same.
-- The map size, the vehicle start, the validation of the Grid Size dialog, map resizing, and obstacle blocking also live in the shared core (`src/app.rs`, `src/grid.rs`, `src/car.rs`); each platform only builds the dialog.
-- The recent files list, including where it is stored, is shared (`src/recent.rs`); each platform only shows it in its File menu.
-- Map files are encoded, decoded, and validated by a shared module (`src/map_file.rs`) built on serde and serde_json. The format itself is defined separately in `schemas/map.schema.json`.
+- The code is split into two modules. The simulator (`src/simulator/`) holds the map, the vehicle, and the driving rules, and knows nothing about windows, drawing, or input devices. The desktop interface (`src/ui/`) holds everything the user sees and touches, and uses only the items the simulator re-exports from `src/simulator/mod.rs`. The simulator never depends on the interface, so future modules such as autonomous driving can drive the vehicle through the same API.
+- Map generation, the grid, and the vehicle live in the simulator (`src/simulator/grid.rs`, `src/simulator/car.rs`).
+- The vehicle is driven with commands (forward, reverse, turn left, turn right). The simulation (`src/simulator/simulation.rs`) applies them: it keeps the vehicle on the map, lets obstacles block it, and reports what each command did. It also replaces, resizes, and edits the map and keeps the vehicle start. The arrow keys are one source of commands.
+- Rendering is performed from a shared pixel buffer so the app can paint the same visual state across platforms (`src/ui/render.rs`).
+- Edit mode, the mouse editing rules, the mapping from screen points to cells, the status text, and the legend entries live in the shared interface code (`src/ui/app.rs`, `src/ui/render.rs`) so both platforms behave the same.
+- The validation of the Grid Size dialog is shared (`src/ui/app.rs`); the simulation applies the resulting size and vehicle start, and each platform only builds the dialog.
+- The recent files list, including where it is stored, is shared (`src/ui/recent.rs`); each platform only shows it in its File menu.
+- Map files are encoded, decoded, and validated by the simulator (`src/simulator/map_file.rs`) using serde and serde_json. The format itself is defined separately in `schemas/map.schema.json`.
 
 ### Current technical constraints
 - Maps have 2 to 100 rows and columns; larger maps are drawn with smaller cells to fit the window.
