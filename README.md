@@ -154,6 +154,18 @@ Like Microsoft Word and Excel, the File menu lists the map files you saved or lo
 
 The list is kept between sessions in a `recent_files.txt` file, in `%APPDATA%\rust_pathfinder` on Windows and in `$XDG_CONFIG_HOME/rust_pathfinder` (by default `~/.config/rust_pathfinder`) on Linux.
 
+## Project structure
+
+The source code is split into modules that depend on each other in one direction only:
+
+| Module | Contents |
+| --- | --- |
+| [`src/simulator/`](src/simulator) | The simulated world: the grid and its terrain, the vehicle, the driving rules (the vehicle stays on the map and obstacles block it), map generation, and map files. It has no user interface code. |
+| [`src/ui/`](src/ui) | The desktop interface: the Linux (GTK 4) and Windows (Win32) windows, menus, and dialogs, the drawing of the map, the legend, the status bar, map editing, and the recent files. |
+| [`src/main.rs`](src/main.rs) | Starts the desktop interface. |
+
+The interface uses the simulator, but the simulator never uses the interface. Other code uses only the items that [`src/simulator/mod.rs`](src/simulator/mod.rs) re-exports. A driver steers the vehicle by sending commands (`Forward`, `Reverse`, `TurnLeft`, `TurnRight`) to `Simulation::drive`, which reports what each command did: the vehicle moved, turned, was blocked by an obstacle, or reached the edge of the map. The arrow keys are one such driver, and future modules, such as a self-driving one, can drive the vehicle the same way.
+
 ## Build and test
 
 ```sh
