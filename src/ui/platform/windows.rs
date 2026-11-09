@@ -39,14 +39,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_VSCROLL,
 };
 
-use crate::app::{AppState, HEADINGS, MapSettings, MouseButton, VehicleKey};
-use crate::config::{
-    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE, MAX_GRID_SIZE,
-    MIN_GRID_SIZE,
+use crate::simulator::{Command, DEFAULT_FILE_NAME, FILE_EXTENSION, MAX_GRID_SIZE, MIN_GRID_SIZE};
+use crate::ui::app::{AppState, HEADINGS, MapSettings, MouseButton};
+use crate::ui::config::{
+    APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE,
 };
-use crate::map_file::{DEFAULT_FILE_NAME, FILE_EXTENSION};
-use crate::recent::{MAX_RECENT_FILES, RecentFiles};
-use crate::render::LEGEND;
+use crate::ui::recent::{MAX_RECENT_FILES, RecentFiles};
+use crate::ui::render::LEGEND;
 
 const ID_FILE_NEW: usize = 1001;
 const ID_FILE_SAVE: usize = 1002;
@@ -371,16 +370,16 @@ unsafe extern "system" fn window_proc(
                 unsafe { DestroyWindow(hwnd) };
                 return 0;
             }
-            let key = match wparam {
-                0x26 => Some(VehicleKey::Forward),
-                0x28 => Some(VehicleKey::Reverse),
-                0x25 => Some(VehicleKey::TurnLeft),
-                0x27 => Some(VehicleKey::TurnRight),
+            let command = match wparam {
+                0x26 => Some(Command::Forward),
+                0x28 => Some(Command::Reverse),
+                0x25 => Some(Command::TurnLeft),
+                0x27 => Some(Command::TurnRight),
                 _ => None,
             };
-            if let (Some(key), Some(state)) = (key, unsafe { state_mut(hwnd) }) {
+            if let (Some(command), Some(state)) = (command, unsafe { state_mut(hwnd) }) {
                 // The keys do nothing in edit mode.
-                if let Some(changed_cells) = state.app.handle_vehicle_key(key) {
+                if let Some(changed_cells) = state.app.drive(command) {
                     update_status(state);
                     if let Err(error) = update_changed_cells(hwnd, state, changed_cells) {
                         eprintln!("Unable to update the off-screen grid buffer: {error}");
