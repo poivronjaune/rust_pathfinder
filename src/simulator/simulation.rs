@@ -22,6 +22,8 @@ pub(crate) enum Outcome {
     Turned,
     /// An obstacle is in the way, so the car stayed where it was.
     Blocked,
+    /// A configured boundary cell is in the way, so the car stayed where it was.
+    BlockedByBoundary,
     /// The edge of the map is in the way, so the car stayed where it was.
     AtEdge,
 }
@@ -63,6 +65,10 @@ impl Simulation {
         self.start
     }
 
+    pub(crate) fn set_car(&mut self, car: Car) {
+        self.car = car;
+    }
+
     /// Moves or turns the car.
     pub(crate) fn drive(&mut self, command: Command) -> Outcome {
         match command {
@@ -75,6 +81,9 @@ impl Simulation {
                     None => Outcome::AtEdge,
                     Some((row, col)) if self.grid.cells[row][col] == Cell::Obstacle => {
                         Outcome::Blocked
+                    }
+                    Some((row, col)) if self.grid.cells[row][col] == Cell::Boundary => {
+                        Outcome::BlockedByBoundary
                     }
                     Some((row, col)) => {
                         (self.car.row, self.car.col) = (row, col);
@@ -121,7 +130,7 @@ impl Simulation {
         let mut grid = self.grid.resized(rows, cols);
         // The car cannot start inside an obstacle.
         let start_cell = &mut grid.cells[start.row][start.col];
-        if *start_cell == Cell::Obstacle {
+        if *start_cell != Cell::Free {
             *start_cell = Cell::Free;
         }
         self.start = start;
@@ -142,6 +151,16 @@ impl Simulation {
         *current = cell;
         true
     }
+
+    /// Applies a classification only while the environment cell is still unknown. Existing
+    /// simulator terrain remains authoritative and cannot be overwritten by an observation.
+    pub(crate) fn classify_unknown(&mut self, row: usize, col: usize, cell: Cell) -> Option<Cell> {
+        let current = self.grid.cells.get_mut(row)?.get_mut(col)?;
+        if *current == Cell::Unknown {
+            *current = cell;
+        }
+        Some(*current)
+    }
 }
 
 #[cfg(test)]
@@ -157,8 +176,10 @@ mod tests {
             col: 2,
             direction: Direction::Up,
         };
+        let mut grid = Grid::unknown(5, 5);
+        grid.cells[car.row][car.col] = Cell::Free;
         Simulation {
-            grid: Grid::unknown(5, 5),
+            grid,
             car,
             start: car,
         }
@@ -178,6 +199,7 @@ mod tests {
         assert_eq!(simulation.car(), start);
         assert_eq!(simulation.start(), start);
         assert_eq!(simulation.grid().cells[start.row][start.col], Cell::Free);
+        assert_eq!(Simulation::new(), Simulation::new());
     }
 
     #[test]
@@ -205,6 +227,17 @@ mod tests {
         assert_eq!(simulation.drive(Command::Forward), Outcome::Blocked);
         assert_eq!(simulation.drive(Command::Reverse), Outcome::Blocked);
         assert_eq!(simulation.car(), car);
+    }
+
+    #[test]
+    fn boundary_cells_block_manual_driving() {
+        let mut simulation = blank_simulation();
+        simulation.set_cell(1, 2, Cell::Boundary);
+        assert_eq!(
+            simulation.drive(Command::Forward),
+            Outcome::BlockedByBoundary
+        );
+        assert_eq!(position(&simulation), (2, 2));
     }
 
     #[test]

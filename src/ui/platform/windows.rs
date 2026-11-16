@@ -11,8 +11,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CALCRECT,
     DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
     FrameRect, GDI_ERROR, GetDC, GetStockObject, GetSysColor, GetSysColorBrush, HALFTONE, HBITMAP,
-    HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
-    SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits, TRANSPARENT,
+    HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode,
+    SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::Dialogs::{
@@ -28,18 +28,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CheckMenuItem, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu,
     DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetMenu, GetMenuItemCount,
     GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, HMENU, IDC_ARROW,
-    IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETFONT, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFONT,
-    WM_SIZE, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_DLGMODALFRAME, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    IsDialogMessageW, KillTimer, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+    MESSAGEBOX_STYLE, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+    SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage,
+    WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_GETFONT,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
-use crate::simulator::{Command, DEFAULT_FILE_NAME, FILE_EXTENSION, MAX_GRID_SIZE, MIN_GRID_SIZE};
+use crate::navigator::{Event as NavigatorEvent, ExecutionState, Position, Terrain};
+use crate::simulator::{
+    Cell, Command, DEFAULT_FILE_NAME, FILE_EXTENSION, MAX_GRID_SIZE, MIN_GRID_SIZE,
+};
 use crate::ui::app::{AppState, HEADINGS, MapSettings, MouseButton};
 use crate::ui::config::{
     APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_NAME, APP_VERSION, APP_WEBSITE,
@@ -57,7 +60,17 @@ const ID_FILE_RECENT_FIRST: usize = 1011;
 const ID_FILE_RECENT_LAST: usize = ID_FILE_RECENT_FIRST + MAX_RECENT_FILES - 1;
 const ID_MAP_EDIT: usize = 1101;
 const ID_MAP_GRID_SIZE: usize = 1102;
+const ID_MAP_PAINT_FREE: usize = 1103;
+const ID_MAP_PAINT_BOUNDARY: usize = 1104;
+const ID_MAP_PAINT_DEFAULT: usize = 1105;
+const ID_MAP_DISCOVERED_VIEW: usize = 1106;
 const ID_ABOUT: usize = 1201;
+const ID_NAV_START: usize = 1301;
+const ID_NAV_PAUSE: usize = 1302;
+const ID_NAV_STEP: usize = 1303;
+const ID_NAV_RESET_SESSION: usize = 1304;
+const ID_NAV_RESET_MAP: usize = 1305;
+const NAV_TIMER: usize = 1;
 const STATUS_HEIGHT: i32 = 24;
 /// Height of the legend panel between the grid and the status bar.
 const LEGEND_HEIGHT: i32 = 28;
@@ -107,6 +120,7 @@ struct WindowState {
     back_buffer: Option<BackBuffer>,
     /// Button pressed on the window in edit mode; moving the mouse while it is held paints cells.
     painting: Option<MouseButton>,
+    navigator_continuous: bool,
 }
 
 struct BackBuffer {
@@ -184,6 +198,7 @@ pub(super) fn run() -> Result<(), String> {
         status_bar: null_mut(),
         back_buffer: None,
         painting: None,
+        navigator_continuous: false,
     });
     let state_pointer = (&mut *state) as *mut WindowState;
     let hwnd = unsafe {
@@ -231,22 +246,52 @@ fn create_menu() -> Result<(HMENU, HMENU), String> {
     let menu_bar = unsafe { CreateMenu() };
     let file_menu = unsafe { CreatePopupMenu() };
     let map_menu = unsafe { CreatePopupMenu() };
-    if menu_bar.is_null() || file_menu.is_null() || map_menu.is_null() {
+    let navigator_menu = unsafe { CreatePopupMenu() };
+    if menu_bar.is_null() || file_menu.is_null() || map_menu.is_null() || navigator_menu.is_null() {
         return Err("Unable to create the application menus.".to_owned());
     }
 
-    for (label, command) in [("Edit", ID_MAP_EDIT), ("Grid Size...", ID_MAP_GRID_SIZE)] {
+    for (label, command) in [
+        ("Edit", ID_MAP_EDIT),
+        ("Grid Size...", ID_MAP_GRID_SIZE),
+        ("Paint Free", ID_MAP_PAINT_FREE),
+        ("Paint Boundary", ID_MAP_PAINT_BOUNDARY),
+        ("Obstacle / Unknown Brush", ID_MAP_PAINT_DEFAULT),
+        ("Toggle Discovered View", ID_MAP_DISCOVERED_VIEW),
+    ] {
         let label = wide(label);
         if unsafe { AppendMenuW(map_menu, MF_STRING, command, label.as_ptr()) } == 0 {
             return Err("Unable to add a Map menu command.".to_owned());
         }
     }
 
+    for (label, command) in [
+        ("Start", ID_NAV_START),
+        ("Pause", ID_NAV_PAUSE),
+        ("Step", ID_NAV_STEP),
+        ("Reset Session", ID_NAV_RESET_SESSION),
+        ("Reset Map", ID_NAV_RESET_MAP),
+    ] {
+        let label = wide(label);
+        if unsafe { AppendMenuW(navigator_menu, MF_STRING, command, label.as_ptr()) } == 0 {
+            return Err("Unable to add a Navigator menu command.".to_owned());
+        }
+    }
+
     let file_label = wide("File");
     let map_label = wide("Map");
+    let navigator_label = wide("Navigator");
     let about_label = wide("About");
     if unsafe { AppendMenuW(menu_bar, MF_POPUP, file_menu as usize, file_label.as_ptr()) } == 0
         || unsafe { AppendMenuW(menu_bar, MF_POPUP, map_menu as usize, map_label.as_ptr()) } == 0
+        || unsafe {
+            AppendMenuW(
+                menu_bar,
+                MF_POPUP,
+                navigator_menu as usize,
+                navigator_label.as_ptr(),
+            )
+        } == 0
         || unsafe { AppendMenuW(menu_bar, MF_STRING, ID_ABOUT, about_label.as_ptr()) } == 0
     {
         return Err("Unable to assemble the application menu bar.".to_owned());
@@ -357,8 +402,25 @@ unsafe extern "system" fn window_proc(
                 }
                 ID_MAP_EDIT => toggle_editing(hwnd),
                 ID_MAP_GRID_SIZE => change_grid_size(hwnd),
+                ID_MAP_PAINT_FREE => set_paint_brush(hwnd, Some(Cell::Free)),
+                ID_MAP_PAINT_BOUNDARY => set_paint_brush(hwnd, Some(Cell::Boundary)),
+                ID_MAP_PAINT_DEFAULT => set_paint_brush(hwnd, None),
+                ID_MAP_DISCOVERED_VIEW => toggle_discovered_view(hwnd),
+                ID_NAV_START => start_navigator(hwnd),
+                ID_NAV_PAUSE => pause_navigator(hwnd),
+                ID_NAV_STEP => step_navigator(hwnd),
+                ID_NAV_RESET_SESSION => reset_navigator_session(hwnd),
+                ID_NAV_RESET_MAP => reset_navigator_map(hwnd),
                 ID_ABOUT => show_about(hwnd),
                 _ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+            }
+            0
+        }
+        WM_TIMER if wparam == NAV_TIMER => {
+            if unsafe { state_mut(hwnd) }
+                .is_some_and(|state| state.app.navigator_state() == ExecutionState::Running)
+            {
+                advance_navigator(hwnd);
             }
             0
         }
@@ -450,6 +512,154 @@ fn resize_status(hwnd: HWND, status_bar: HWND) {
 fn update_status(state: &WindowState) {
     let text = wide(&state.app.status_text());
     unsafe { SendMessageW(state.status_bar, SB_SETTEXTW, 0, text.as_ptr() as LPARAM) };
+}
+
+fn start_navigator(hwnd: HWND) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    match state.app.navigator_start() {
+        Ok(()) => {
+            if unsafe { SetTimer(hwnd, NAV_TIMER, 100, None) } == 0 {
+                state.navigator_continuous = false;
+                state.app.navigator_pause();
+                show_message(
+                    hwnd,
+                    "Navigator",
+                    "Unable to start continuous navigation.",
+                    MB_ICONERROR,
+                );
+                update_status(state);
+                return;
+            }
+            state.navigator_continuous = true;
+            update_status(state);
+        }
+        Err(error) => show_message(hwnd, "Navigator", &error, MB_ICONERROR),
+    }
+}
+
+fn pause_navigator(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, NAV_TIMER) };
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.navigator_continuous = false;
+        state.app.navigator_pause();
+        update_status(state);
+    }
+}
+
+fn step_navigator(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, NAV_TIMER) };
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.navigator_continuous = false;
+    }
+    advance_navigator(hwnd);
+}
+
+fn reset_navigator_session(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, NAV_TIMER) };
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.navigator_continuous = false;
+        state.app.reset_navigator_session();
+        update_status(state);
+        refresh_grid(hwnd, state);
+    }
+}
+
+fn reset_navigator_map(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, NAV_TIMER) };
+    if let Some(state) = unsafe { state_mut(hwnd) } {
+        state.navigator_continuous = false;
+        state.app.reset_navigator_map_from_ui();
+        update_status(state);
+        refresh_grid(hwnd, state);
+    }
+}
+
+fn advance_navigator(hwnd: HWND) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    let event = state.app.navigator_step();
+    update_status(state);
+    refresh_grid(hwnd, state);
+    match event {
+        NavigatorEvent::RequestInspection(position) => show_inspection(hwnd, position),
+        NavigatorEvent::WaitForInspection => {
+            if let Some(position) = state.app.pending_inspection() {
+                show_inspection(hwnd, position);
+            }
+        }
+        NavigatorEvent::UnableToProgress => {
+            if state.app.navigator_state() == ExecutionState::Blocked {
+                state.navigator_continuous = false;
+                unsafe { KillTimer(hwnd, NAV_TIMER) };
+                show_message(
+                    hwnd,
+                    "Navigator",
+                    "Navigation is blocked because the discovered map conflicts with the simulator.",
+                    MB_ICONERROR,
+                );
+            }
+        }
+        NavigatorEvent::MissionCompleted => {
+            state.navigator_continuous = false;
+            unsafe { KillTimer(hwnd, NAV_TIMER) };
+            update_status(state);
+        }
+        NavigatorEvent::Drive(_) => {}
+    }
+}
+
+fn show_inspection(hwnd: HWND, position: Position) {
+    let text = wide(&format!(
+        "Classify relative row {}, column {}:\n\nAbort = Free\nRetry = Obstacle\nIgnore = Boundary\n\nChoose a button or close this dialog to leave the request unresolved.",
+        position.row, position.col
+    ));
+    let title = wide("Navigator Inspection");
+    let result = unsafe {
+        MessageBoxW(
+            hwnd,
+            text.as_ptr(),
+            title.as_ptr(),
+            0x0000_0002 | 0x0000_0020,
+        )
+    };
+    let terrain = match result {
+        3 => Some(Terrain::Free),
+        4 => Some(Terrain::Obstacle),
+        5 => Some(Terrain::Boundary),
+        _ => None,
+    };
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    if let Some(terrain) = terrain {
+        let resolved = state.app.resolve_inspection(terrain);
+        if !resolved {
+            state.navigator_continuous = false;
+            unsafe { KillTimer(hwnd, NAV_TIMER) };
+            state.app.navigator_pause();
+            show_message(
+                hwnd,
+                "Navigator Inspection",
+                "The pending inspection could not be resolved.",
+                MB_ICONERROR,
+            );
+        } else if state.navigator_continuous {
+            if let Err(error) = state.app.navigator_start() {
+                state.navigator_continuous = false;
+                unsafe { KillTimer(hwnd, NAV_TIMER) };
+                show_message(hwnd, "Navigator", &error, MB_ICONERROR);
+            }
+        }
+    } else {
+        state.navigator_continuous = false;
+        unsafe { KillTimer(hwnd, NAV_TIMER) };
+        state.app.navigator_pause();
+    }
+    update_status(state);
+    refresh_grid(hwnd, state);
 }
 
 fn new_map(hwnd: HWND) {
@@ -557,10 +767,52 @@ fn toggle_editing(hwnd: HWND) {
     };
     let editing = !state.app.is_editing();
     state.app.set_editing(editing);
-    let check = if editing { MF_CHECKED } else { MF_UNCHECKED };
+    let check = if state.app.is_editing() {
+        MF_CHECKED
+    } else {
+        MF_UNCHECKED
+    };
     unsafe { CheckMenuItem(GetMenu(hwnd), ID_MAP_EDIT as u32, MF_BYCOMMAND | check) };
     update_status(state);
     refresh_grid(hwnd, state);
+}
+
+fn toggle_discovered_view(hwnd: HWND) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    state.app.toggle_discovered_view();
+    let check = if state.app.is_discovered_view() {
+        MF_CHECKED
+    } else {
+        MF_UNCHECKED
+    };
+    unsafe {
+        CheckMenuItem(
+            GetMenu(hwnd),
+            ID_MAP_DISCOVERED_VIEW as u32,
+            MF_BYCOMMAND | check,
+        )
+    };
+    update_status(state);
+    refresh_grid(hwnd, state);
+}
+
+fn set_paint_brush(hwnd: HWND, brush: Option<Cell>) {
+    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+        return;
+    };
+    if !state.app.is_editing() {
+        show_message(
+            hwnd,
+            "Map Editing",
+            "Turn on Map → Edit before choosing a paint brush.",
+            MB_ICONINFORMATION,
+        );
+        return;
+    }
+    state.app.set_edit_brush(brush);
+    update_status(state);
 }
 
 /// Map → Grid Size: asks for the size of the map and where the car starts, then applies them.
@@ -726,36 +978,32 @@ unsafe fn dialog_mut(hwnd: HWND) -> Option<&'static mut SettingsDialog> {
 /// Creates the Grid Size dialog's labels, fields and buttons, filled with the current settings.
 fn create_settings_controls(hwnd: HWND, dialog: &mut SettingsDialog) {
     let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-    let control = |class: &str,
-                   text: &str,
-                   style: u32,
-                   ex_style: u32,
-                   bounds: [i32; 4],
-                   id: usize| {
-        let class = wide(class);
-        let text = wide(text);
-        let [x, y, width, height] = bounds;
-        let control = unsafe {
-            CreateWindowExW(
-                ex_style,
-                class.as_ptr(),
-                text.as_ptr(),
-                WS_CHILD | WS_VISIBLE | style,
-                x,
-                y,
-                width,
-                height,
-                hwnd,
-                id as HMENU,
-                GetModuleHandleW(null()),
-                null(),
-            )
+    let control =
+        |class: &str, text: &str, style: u32, ex_style: u32, bounds: [i32; 4], id: usize| {
+            let class = wide(class);
+            let text = wide(text);
+            let [x, y, width, height] = bounds;
+            let control = unsafe {
+                CreateWindowExW(
+                    ex_style,
+                    class.as_ptr(),
+                    text.as_ptr(),
+                    WS_CHILD | WS_VISIBLE | style,
+                    x,
+                    y,
+                    width,
+                    height,
+                    hwnd,
+                    id as HMENU,
+                    GetModuleHandleW(null()),
+                    null(),
+                )
+            };
+            if !control.is_null() {
+                unsafe { SendMessageW(control, WM_SETFONT, font as WPARAM, 0) };
+            }
+            control
         };
-        if !control.is_null() {
-            unsafe { SendMessageW(control, WM_SETFONT, font as WPARAM, 0) };
-        }
-        control
-    };
 
     let initial = dialog.initial;
     control("STATIC", "Grid size", 0, 0, [12, 12, 276, 18], 0);
@@ -764,8 +1012,20 @@ fn create_settings_controls(hwnd: HWND, dialog: &mut SettingsDialog) {
     let fields = [
         ("Rows:", initial.rows, size_hint.as_str(), 34, ID_ROWS),
         ("Columns:", initial.cols, size_hint.as_str(), 62, ID_COLUMNS),
-        ("Row:", initial.start.row + 1, "(1 to rows)", 122, ID_START_ROW),
-        ("Column:", initial.start.col + 1, "(1 to columns)", 150, ID_START_COLUMN),
+        (
+            "Row:",
+            initial.start.row + 1,
+            "(1 to rows)",
+            122,
+            ID_START_ROW,
+        ),
+        (
+            "Column:",
+            initial.start.col + 1,
+            "(1 to columns)",
+            150,
+            ID_START_COLUMN,
+        ),
     ];
     for (index, (label, value, hint, top, id)) in fields.into_iter().enumerate() {
         control("STATIC", label, 0, 0, [24, top + 3, 96, 18], 0);
@@ -796,7 +1056,14 @@ fn create_settings_controls(hwnd: HWND, dialog: &mut SettingsDialog) {
     let ok_style = WS_TABSTOP | BS_DEFPUSHBUTTON;
     control("BUTTON", "OK", ok_style, 0, [120, 222, 80, 26], ID_OK);
     let cancel_style = WS_TABSTOP | BS_PUSHBUTTON;
-    control("BUTTON", "Cancel", cancel_style, 0, [208, 222, 80, 26], ID_CANCEL);
+    control(
+        "BUTTON",
+        "Cancel",
+        cancel_style,
+        0,
+        [208, 222, 80, 26],
+        ID_CANCEL,
+    );
 }
 
 /// OK button: closes the dialog with the entered settings, or explains what to correct.

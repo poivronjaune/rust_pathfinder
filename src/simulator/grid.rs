@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serde::{Deserialize, Serialize};
 
 use crate::simulator::config::CLEAR_RADIUS;
@@ -12,6 +10,7 @@ pub(crate) enum Cell {
     Free,
     Obstacle,
     Unknown,
+    Boundary,
 }
 
 /// Rectangular map, addressed as `cells[row][col]`. Every row holds `cols` cells.
@@ -53,10 +52,7 @@ impl Grid {
     }
 
     pub(crate) fn backyard(rows: usize, cols: usize, car_row: usize, car_col: usize) -> Self {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos() as u64);
-        Self::backyard_with_seed(rows, cols, car_row, car_col, seed)
+        Self::backyard_with_seed(rows, cols, car_row, car_col, 0x5255_5354_5046)
     }
 
     pub(crate) fn backyard_with_seed(
@@ -190,7 +186,12 @@ mod tests {
         let grid = Grid::unknown(3, 5);
         assert_eq!(grid.cells.len(), 3);
         assert!(grid.cells.iter().all(|row| row.len() == 5));
-        assert!(grid.cells.iter().flatten().all(|&cell| cell == Cell::Unknown));
+        assert!(
+            grid.cells
+                .iter()
+                .flatten()
+                .all(|&cell| cell == Cell::Unknown)
+        );
     }
 
     #[test]
@@ -207,8 +208,9 @@ mod tests {
         assert!(larger.cells.iter().all(|row| row.len() == 5));
 
         let smaller = grid.resized(2, 1);
-        assert_eq!(smaller.cells, vec![vec![Cell::Obstacle], vec![Cell::Unknown]]);
+        assert_eq!(
+            smaller.cells,
+            vec![vec![Cell::Obstacle], vec![Cell::Unknown]]
+        );
     }
 }
-
-

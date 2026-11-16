@@ -1,6 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell as StateCell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk4::cairo::{Format, ImageSurface};
 use gtk4::gdk;
@@ -14,8 +15,10 @@ use gtk4::{
     PopoverMenuBar, ResponseType, Separator, Statusbar, Window,
 };
 
+use crate::navigator::{Event as NavigatorEvent, ExecutionState, Position, Terrain};
 use crate::simulator::{
-    Command, DEFAULT_FILE_NAME, DEFAULT_GRID_SIZE, FILE_EXTENSION, MAX_GRID_SIZE, MIN_GRID_SIZE,
+    Cell, Command, DEFAULT_FILE_NAME, DEFAULT_GRID_SIZE, FILE_EXTENSION, MAX_GRID_SIZE,
+    MIN_GRID_SIZE,
 };
 use crate::ui::app::{AppState, HEADINGS, MapSettings, MouseButton};
 use crate::ui::config::{
@@ -44,6 +47,7 @@ struct Ui {
     drawing_area: DrawingArea,
     status_bar: Statusbar,
     status_context: u32,
+    navigator_continuous: StateCell<bool>,
 }
 
 impl Ui {
@@ -111,6 +115,7 @@ fn build_window(application: &Application) {
     let layout = GtkBox::new(Orientation::Vertical, 0);
     let recent_menu = gio::Menu::new();
     let menu_bar = create_menu_bar(&recent_menu);
+    let navigator_controls = create_navigator_controls();
     let drawing_area = DrawingArea::new();
     drawing_area.set_content_width(MAP_AREA_SIZE);
     drawing_area.set_content_height(MAP_AREA_SIZE);
@@ -122,6 +127,7 @@ fn build_window(application: &Application) {
     let status_context = status_bar.context_id("vehicle-state");
 
     layout.append(&menu_bar);
+    layout.append(&navigator_controls);
     layout.append(&drawing_area);
     layout.append(&Separator::new(Orientation::Horizontal));
     layout.append(&create_legend());
@@ -136,6 +142,7 @@ fn build_window(application: &Application) {
         drawing_area,
         status_bar,
         status_context,
+        navigator_continuous: StateCell::new(false),
     });
     ui.update_recent_menu();
     ui.update_status();
@@ -146,10 +153,183 @@ fn build_window(application: &Application) {
         });
 
     install_actions(application, &ui);
+    install_navigator_controls(&ui, &navigator_controls);
     install_vehicle_keys(&ui);
     install_map_editing(&ui);
+    let timer_ui = Rc::clone(&ui);
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        if timer_ui.state.borrow().navigator_state() == ExecutionState::Running {
+            advance_navigator(&timer_ui);
+        }
+        glib::ControlFlow::Continue
+    });
     ui.window.present();
     ui.drawing_area.grab_focus();
+}
+
+fn create_navigator_controls() -> GtkBox {
+    let controls = GtkBox::new(Orientation::Horizontal, 6);
+    controls.set_margin_start(8);
+    controls.set_margin_end(8);
+    controls.set_margin_top(6);
+    controls.set_margin_bottom(6);
+    controls
+}
+
+fn install_navigator_controls(ui: &Rc<Ui>, controls: &GtkBox) {
+    for (label, action) in [
+        ("Start", 0u8),
+        ("Pause", 1),
+        ("Step", 2),
+        ("Reset Session", 3),
+        ("Reset Map", 4),
+    ] {
+        let button = Button::with_label(label);
+        let button_ui = Rc::clone(ui);
+        button.connect_clicked(move |_| match action {
+            0 => {
+                match button_ui.state.borrow_mut().navigator_start() {
+                    Ok(()) => button_ui.navigator_continuous.set(true),
+                    Err(error) => show_error(&button_ui.window, "Navigator", &error),
+                }
+                button_ui.update_status();
+            }
+            1 => {
+                button_ui.navigator_continuous.set(false);
+                button_ui.state.borrow_mut().navigator_pause();
+                button_ui.update_status();
+            }
+            2 => {
+                button_ui.navigator_continuous.set(false);
+                advance_navigator(&button_ui);
+            }
+            3 => {
+                button_ui.navigator_continuous.set(false);
+                button_ui.state.borrow_mut().reset_navigator_session();
+                button_ui.update_status();
+                button_ui.drawing_area.queue_draw();
+            }
+            _ => {
+                button_ui.navigator_continuous.set(false);
+                button_ui.state.borrow_mut().reset_navigator_map_from_ui();
+                button_ui.update_status();
+                button_ui.drawing_area.queue_draw();
+            }
+        });
+        controls.append(&button);
+    }
+    for (label, brush) in [
+        ("Paint Free", Some(Cell::Free)),
+        ("Paint Boundary", Some(Cell::Boundary)),
+        ("Obstacle / Unknown", None),
+    ] {
+        let button = Button::with_label(label);
+        let button_ui = Rc::clone(ui);
+        button.connect_clicked(move |_| {
+            let mut state = button_ui.state.borrow_mut();
+            if !state.is_editing() {
+                drop(state);
+                show_error(
+                    &button_ui.window,
+                    "Map Editing",
+                    "Turn on Map → Edit before choosing a paint brush.",
+                );
+                return;
+            }
+            state.set_edit_brush(brush);
+            drop(state);
+            button_ui.update_status();
+        });
+        controls.append(&button);
+    }
+    let view_button = Button::with_label("Toggle Discovered View");
+    let view_ui = Rc::clone(ui);
+    view_button.connect_clicked(move |_| {
+        view_ui.state.borrow_mut().toggle_discovered_view();
+        view_ui.update_status();
+        view_ui.drawing_area.queue_draw();
+    });
+    controls.append(&view_button);
+}
+
+fn advance_navigator(ui: &Rc<Ui>) {
+    let event = ui.state.borrow_mut().navigator_step();
+    ui.update_status();
+    ui.drawing_area.queue_draw();
+    match event {
+        NavigatorEvent::RequestInspection(position) => show_inspection_dialog(ui, position),
+        NavigatorEvent::WaitForInspection => {
+            if let Some(position) = ui.state.borrow().pending_inspection() {
+                show_inspection_dialog(ui, position);
+            }
+        }
+        NavigatorEvent::UnableToProgress => {
+            if ui.state.borrow().navigator_state() == ExecutionState::Blocked {
+                show_error(
+                    &ui.window,
+                    "Navigator",
+                    "Navigation is blocked because the discovered map conflicts with the simulator.",
+                );
+            }
+        }
+        NavigatorEvent::MissionCompleted => {
+            ui.navigator_continuous.set(false);
+            ui.update_status();
+        }
+        NavigatorEvent::Drive(_) => {}
+    }
+}
+
+fn show_inspection_dialog(ui: &Rc<Ui>, position: Position) {
+    let dialog = MessageDialog::builder()
+        .transient_for(&ui.window)
+        .modal(true)
+        .message_type(MessageType::Question)
+        .buttons(gtk4::ButtonsType::None)
+        .text(format!(
+            "Classify the cell at relative row {}, column {}.",
+            position.row, position.col
+        ))
+        .build();
+    dialog.set_title(Some("Navigator Inspection"));
+    dialog.add_button("Free", gtk4::ResponseType::Accept);
+    dialog.add_button("Obstacle", gtk4::ResponseType::Reject);
+    dialog.add_button("Boundary", gtk4::ResponseType::Apply);
+    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
+
+    let dialog_ui = Rc::clone(ui);
+    dialog.connect_response(move |dialog, response| {
+        let terrain = match response {
+            gtk4::ResponseType::Accept => Some(Terrain::Free),
+            gtk4::ResponseType::Reject => Some(Terrain::Obstacle),
+            gtk4::ResponseType::Apply => Some(Terrain::Boundary),
+            _ => None,
+        };
+        if let Some(terrain) = terrain {
+            let resolved = dialog_ui.state.borrow_mut().resolve_inspection(terrain);
+            if !resolved {
+                dialog_ui.navigator_continuous.set(false);
+                dialog_ui.state.borrow_mut().navigator_pause();
+                show_error(
+                    &dialog_ui.window,
+                    "Navigator Inspection",
+                    "The pending inspection could not be resolved.",
+                );
+            } else if dialog_ui.navigator_continuous.get() {
+                if let Err(error) = dialog_ui.state.borrow_mut().navigator_start() {
+                    dialog_ui.navigator_continuous.set(false);
+                    show_error(&dialog_ui.window, "Navigator", &error);
+                }
+            }
+        } else {
+            dialog_ui.navigator_continuous.set(false);
+            dialog_ui.state.borrow_mut().navigator_pause();
+        }
+        dialog.close();
+        dialog_ui.update_status();
+        dialog_ui.drawing_area.queue_draw();
+    });
+    dialog.present();
 }
 
 fn create_menu_bar(recent_menu: &gio::Menu) -> PopoverMenuBar {
@@ -277,7 +457,7 @@ fn install_actions(application: &Application, ui: &Rc<Ui>) {
     edit.connect_activate(move |action, _| {
         let editing = !edit_ui.state.borrow().is_editing();
         edit_ui.state.borrow_mut().set_editing(editing);
-        action.set_state(&editing.to_variant());
+        action.set_state(&edit_ui.state.borrow().is_editing().to_variant());
         edit_ui.update_status();
         edit_ui.drawing_area.queue_draw();
     });

@@ -142,7 +142,7 @@ fn shorten(text: &str, max_chars: usize) -> String {
         return text.to_owned();
     }
     let kept = max_chars.saturating_sub(1);
-    let head = kept / 3;
+    let head = (kept / 3 + 1).min(kept);
     let tail = kept - head;
     let mut short: String = chars[..head].iter().collect();
     short.push('\u{2026}');
@@ -206,7 +206,10 @@ mod tests {
         let text = "\n/maps/one.map\n  /maps/two.map  \n/maps/one.map\n";
         assert_eq!(
             parse(text),
-            vec![PathBuf::from("/maps/one.map"), PathBuf::from("/maps/two.map")]
+            vec![
+                PathBuf::from("/maps/one.map"),
+                PathBuf::from("/maps/two.map")
+            ]
         );
     }
 

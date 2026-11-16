@@ -1,3 +1,4 @@
+mod navigator;
 mod simulator;
 mod ui;
 

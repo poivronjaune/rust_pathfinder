@@ -10,10 +10,10 @@ use crate::simulator::{Car, Cell, Direction, Grid, MAX_GRID_SIZE, MIN_GRID_SIZE}
 /// `$id` of `schemas/map.schema.json`, written into saved maps so editors can validate them.
 const SCHEMA_URL: &str =
     "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json";
-/// Version written by File → Save. Version 2 added the optional car start.
-const FORMAT_VERSION: u32 = 2;
+/// Version written by File → Save. Version 3 added Boundary terrain.
+const FORMAT_VERSION: u32 = 3;
 /// Versions that File → Load can read.
-const SUPPORTED_VERSIONS: [u32; 2] = [1, FORMAT_VERSION];
+const SUPPORTED_VERSIONS: [u32; 3] = [1, 2, FORMAT_VERSION];
 /// Extension of map files, without the leading dot.
 pub(crate) const FILE_EXTENSION: &str = "map";
 /// Name suggested when saving a map.
@@ -57,6 +57,12 @@ pub(crate) struct MapData {
 }
 
 pub(crate) fn save(grid: &Grid, start: Car, path: &Path) -> Result<(), String> {
+    if grid.cells.get(start.row).and_then(|row| row.get(start.col)) != Some(&Cell::Free) {
+        return Err(format!(
+            "Unable to save the map to {}: the configured car start must be on a free cell",
+            path.display()
+        ));
+    }
     let result = match to_json(grid, start) {
         Ok(json) => fs::write(path, json).map_err(|error| error.to_string()),
         Err(error) => Err(error.to_string()),
@@ -102,6 +108,9 @@ fn from_json(json: &str) -> Result<MapData, String> {
     }
 
     let document: MapDocument = parse(json)?;
+    if document.format_version == FORMAT_VERSION && document.start.is_none() {
+        return Err("version 3 maps must include the car start".to_owned());
+    }
     if document.cells.len() != document.rows {
         return Err(format!(
             "the map declares {} rows but cells contains {}",
@@ -121,6 +130,18 @@ fn from_json(json: &str) -> Result<MapData, String> {
             document.columns
         ));
     }
+    if document.format_version < 3
+        && document
+            .cells
+            .iter()
+            .flatten()
+            .any(|cell| *cell == Cell::Boundary)
+    {
+        return Err(format!(
+            "map format version {} does not support boundary cells",
+            document.format_version
+        ));
+    }
     let sizes = MIN_GRID_SIZE..=MAX_GRID_SIZE;
     if !sizes.contains(&document.rows) || !sizes.contains(&document.columns) {
         return Err(format!(
@@ -129,6 +150,7 @@ fn from_json(json: &str) -> Result<MapData, String> {
             document.rows, document.columns
         ));
     }
+    let has_start = document.start.is_some();
     let start = match document.start {
         Some(start) if start.row >= document.rows || start.column >= document.columns => {
             return Err(format!(
@@ -143,12 +165,23 @@ fn from_json(json: &str) -> Result<MapData, String> {
         }),
         None => None,
     };
+    if let Some(start) = start
+        && document.cells[start.row][start.col] != Cell::Free
+    {
+        return Err("the car start must be on a free cell".to_owned());
+    }
 
-    let grid = Grid {
+    let mut grid = Grid {
         rows: document.rows,
         cols: document.columns,
         cells: document.cells,
     };
+    let start = start.or_else(|| Some(Car::start_for(grid.rows, grid.cols)));
+    if let Some(start) = start {
+        if !has_start {
+            grid.cells[start.row][start.col] = Cell::Free;
+        }
+    }
     Ok(MapData { grid, start })
 }
 
@@ -191,7 +224,7 @@ mod tests {
 
     #[test]
     fn saved_json_loads_back_unchanged() {
-        let grid = Grid::backyard_with_seed(SIZE, SIZE, SIZE - 1, SIZE / 2, 7);
+        let grid = Grid::backyard_with_seed(SIZE, SIZE, start().row, start().col, 7);
         let loaded = from_json(&to_json(&grid, start()).unwrap()).unwrap();
         assert_eq!(loaded.grid, grid);
         assert_eq!(loaded.start, Some(start()));
@@ -206,6 +239,7 @@ mod tests {
             col: 30,
             direction: Direction::Left,
         };
+        grid.cells[start.row][start.col] = Cell::Free;
 
         let loaded = from_json(&to_json(&grid, start).unwrap()).unwrap();
         assert_eq!(loaded.grid, grid);
@@ -219,8 +253,42 @@ mod tests {
         document.as_object_mut().unwrap().remove("start");
 
         let loaded = from_json(&document.to_string()).unwrap();
-        assert_eq!(loaded.grid, Grid::unknown(SIZE, SIZE));
-        assert_eq!(loaded.start, None);
+        let mut expected = Grid::unknown(SIZE, SIZE);
+        let default_start = start();
+        expected.cells[default_start.row][default_start.col] = Cell::Free;
+        assert_eq!(loaded.grid, expected);
+        assert_eq!(loaded.start, Some(default_start));
+    }
+
+    #[test]
+    fn loads_version_2_maps_but_rejects_boundary_in_legacy_formats() {
+        let mut v2 = saved_document();
+        v2["formatVersion"] = json!(2);
+        v2["cells"][0][0] = json!("obstacle");
+        assert!(from_json(&v2.to_string()).is_ok());
+
+        v2["cells"][0][0] = json!("boundary");
+        assert!(load_error(&v2).contains("does not support boundary"));
+    }
+
+    #[test]
+    fn version_3_requires_a_free_start_cell() {
+        let mut no_start = saved_document();
+        no_start.as_object_mut().unwrap().remove("start");
+        assert!(load_error(&no_start).contains("must include the car start"));
+
+        let mut blocked_start = saved_document();
+        blocked_start["cells"][start().row][start().col] = json!("boundary");
+        assert!(load_error(&blocked_start).contains("must be on a free cell"));
+    }
+
+    #[test]
+    fn boundary_cells_round_trip_in_version_3() {
+        let mut grid = Grid::unknown(SIZE, SIZE);
+        grid.cells[start().row][start().col] = Cell::Free;
+        grid.cells[0][0] = Cell::Boundary;
+        let loaded = from_json(&to_json(&grid, start()).unwrap()).unwrap();
+        assert_eq!(loaded.grid, grid);
     }
 
     #[test]
@@ -260,7 +328,7 @@ mod tests {
 
     #[test]
     fn ignores_a_leading_byte_order_mark() {
-        let json = format!("\u{feff}{}", to_json(&Grid::unknown(SIZE, SIZE), start()).unwrap());
+        let json = format!("\u{feff}{}", saved_document());
         assert!(from_json(&json).is_ok());
     }
 
@@ -327,7 +395,8 @@ mod tests {
         );
         assert_eq!(
             schema["$defs"]["cell"]["enum"],
-            serde_json::to_value([Cell::Free, Cell::Obstacle, Cell::Unknown]).unwrap()
+            serde_json::to_value([Cell::Free, Cell::Obstacle, Cell::Unknown, Cell::Boundary])
+                .unwrap()
         );
         let headings = [
             Direction::Up,
@@ -363,11 +432,16 @@ mod tests {
         written.remove("$schema");
         written.remove("start");
         assert_eq!(required(&schema), written);
-        assert_eq!(required(&schema["$defs"]["start"]), keys(&document["start"]));
+        assert_eq!(
+            required(&schema["$defs"]["start"]),
+            keys(&document["start"])
+        );
     }
 
     fn saved_document() -> Value {
-        serde_json::from_str(&to_json(&Grid::unknown(SIZE, SIZE), start()).unwrap()).unwrap()
+        let mut grid = Grid::unknown(SIZE, SIZE);
+        grid.cells[start().row][start().col] = Cell::Free;
+        serde_json::from_str(&to_json(&grid, start()).unwrap()).unwrap()
     }
 
     fn keys(object: &Value) -> BTreeSet<String> {

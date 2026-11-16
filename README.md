@@ -4,18 +4,20 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms: Linux and Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#supported-platforms)
 
-A small cross-platform Rust desktop prototype for exploring a grid-based map and vehicle movement. It opens a grid with sample terrain (20 × 20 by default, from 2 to 100 rows and columns) and a vehicle that you can move and turn using the arrow keys; obstacles block it. You can edit the map with the mouse, change its size and where the vehicle starts, start a blank map, save or load maps as `.map` files, and reopen recent files from the File menu. This is an interactive prototype—not yet a route planner.
+A cross-platform Rust desktop simulator for grid exploration and cell-action coverage. It opens a deterministic sample map (20 × 20 by default, from 2 to 100 rows and columns) and a vehicle that you can drive manually or with the autonomous Navigator. Edit terrain, configure the start, save and load `.map` files, and reopen recent maps from the File menu.
 
 ## Features
 
 - Native desktop window on Linux and Windows
-- Grid of 2 to 100 rows and columns (20 × 20 by default) with free, obstacle, and unknown terrain, scaled to fit the window, and a legend that explains the colors
+- Grid of 2 to 100 rows and columns (20 × 20 by default) with free, obstacle, unknown, and boundary terrain, scaled to fit the window, and a legend that explains the colors
 - Keyboard-controlled vehicle: Up/Down to move, Left/Right to turn; obstacles block it
 - [Map editing](#editing-the-map) with the mouse: left click marks obstacles, right click marks unknown terrain
 - [Grid size and vehicle start](#grid-size-and-vehicle-start) chosen in a dialog: number of rows and columns, start cell, and heading
 - Status display showing the vehicle's position and heading, and when an obstacle blocks it
 - File menu to start a blank map, save and load [map files](#map-files), reopen [recent files](#recent-files), and exit
 - Native menus
+- Autonomous Navigator with forward inspection, user terrain classification, one-event Step mode, continuous operation, pause, session reset, and map reset
+- In-memory discovered terrain, ordered travel history, and per-cell action-completion tracking
 
 ## Requirements
 
@@ -79,7 +81,7 @@ Movement is bounded by the grid edges, and the vehicle can't drive into an obsta
 
 ## Editing the map
 
-Choose **Map → Edit** to turn edit mode on, and choose it again to turn it off. While edit mode is on, the menu item shows a check mark, the grid lines turn orange, and the status bar starts with **Editing**.
+Choose **Map → Edit** to turn edit mode on, and choose it again to turn it off. While edit mode is on, the menu item shows a check mark, the grid lines turn orange, and the status bar starts with **Editing**. Use **Paint Free** or **Paint Boundary** in the control bar (Linux) or Map menu (Windows) to select those additional terrain brushes; the default brush keeps the left/right mouse shortcuts.
 
 | Mouse | Action |
 | --- | --- |
@@ -91,6 +93,13 @@ Hold a mouse button and move the pointer to paint several cells at once. Clicks 
 Edits are not saved automatically: use **File → Save** to keep them. Escape and **File → Exit** close the application without asking, even in edit mode.
 
 The legend between the map and the status bar shows what each color means: free, obstacle, and unknown terrain, and the vehicle.
+Use **Navigator → Reset Map** after terrain edits before resuming autonomous navigation.
+
+## Autonomous navigation
+
+The Navigator starts with knowledge of only the vehicle's current cell. It observes up to three cells directly ahead, nearest first, and pauses for you to classify each unknown cell as Free, Obstacle, or Boundary. It never uses the full simulator map to plan. Use the Navigator control bar on Linux or the **Navigator** menu on Windows: **Start** runs continuously, **Pause** stops, and **Step** performs one inspection, turn, or one-cell movement. Reset Session returns to the session start and clears travel/action results while retaining discovered terrain; Reset Map also clears discovered terrain.
+
+The status area reports execution state and provisional completed-action progress. Travel and discovered terrain are session-only and are not written to map files.
 
 ## Grid size and vehicle start
 
@@ -123,17 +132,17 @@ The format is defined by a [JSON Schema](https://json-schema.org/) (draft 2020-1
 | Property | Description |
 | --- | --- |
 | `$schema` | Optional link to the schema, used by editors for validation |
-| `formatVersion` | Version of the file format, currently `2`. Version `1` files, which have no `start`, still load |
+| `formatVersion` | Version of the file format, currently `3`. Versions `1` and `2` remain readable |
 | `rows`, `columns` | Size of the grid, from 2 to 100 |
 | `start` | Optional vehicle start: `row` and `column` counted from 0 at the top-left corner, and `heading` (`"up"`, `"right"`, `"down"`, or `"left"`). Without it, the vehicle starts in the bottom-center cell facing up |
-| `cells` | Terrain addressed as `cells[row][column]`, with row 0 at the top: `"free"`, `"obstacle"`, or `"unknown"` |
+| `cells` | Terrain addressed as `cells[row][column]`, with row 0 at the top: `"free"`, `"obstacle"`, `"unknown"`, or `"boundary"` (v3 only) |
 
 For example, a 2 × 3 map whose vehicle starts in the bottom-right cell facing right:
 
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json",
-  "formatVersion": 2,
+  "formatVersion": 3,
   "rows": 2,
   "columns": 3,
   "start": {
@@ -161,6 +170,7 @@ The source code is split into modules that depend on each other in one direction
 | Module | Contents |
 | --- | --- |
 | [`src/simulator/`](src/simulator) | The simulated world: the grid and its terrain, the vehicle, the driving rules (the vehicle stays on the map and obstacles block it), map generation, and map files. It has no user interface code. |
+| [`src/navigator/`](src/navigator) | The Navigator's sparse discovered map, observation requests, local route decisions, execution state, ordered travel history, and cell-action results. It cannot inspect the simulator's full map. |
 | [`src/ui/`](src/ui) | The desktop interface: the Linux (GTK 4) and Windows (Win32) windows, menus, and dialogs, the drawing of the map, the legend, the status bar, map editing, and the recent files. |
 | [`src/main.rs`](src/main.rs) | Starts the desktop interface. |
 
@@ -177,7 +187,7 @@ To create an optimized build, run `cargo build --release`. The executable is wri
 
 ## Libraries and dependencies
 
-The project uses the following direct dependencies, declared in `Cargo.toml` (the user interface libraries are platform-specific):
+The current application version is **0.2.0**. The project uses the following direct dependencies, declared in `Cargo.toml` (the user interface libraries are platform-specific):
 
 - **[gtk4](https://crates.io/crates/gtk4) `0.10`** — Linux desktop UI and drawing, using GTK 4 (and its Cairo integration).
 - **[windows-sys](https://crates.io/crates/windows-sys) `0.61`** — Windows API bindings for the native window, menus, Grid Size and file dialogs, status bar, and GDI rendering.

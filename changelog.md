@@ -2,6 +2,13 @@
 
 All PRD version history belongs here. `prd.md` is a clean, self-contained description of the current target product and contains no change-tracking notes.
 
+## Application release [0.2.0] — 2026-11-16
+
+- Added the shared, UI-independent Navigator state machine, forward inspection requests, discovered-map rendering, coverage tracking, travel history, and reset controls.
+- Added continuous and one-event execution controls with native terrain-classification dialogs on Windows and Linux.
+- Added Boundary terrain, v3 map serialization/schema, and compatibility for v1/v2 map files.
+- Made the startup sample deterministic and updated the About screen/application version to 0.2.0.
+
 ## [2.0.0] — 2026-11-15
 
 ### Product specification
