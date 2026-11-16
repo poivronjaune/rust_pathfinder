@@ -1,339 +1,459 @@
 # Product Requirements Document: Rust PathFinder
 
-## 1. Overview
+## 1. Product overview
 
-### Product name
-Rust PathFinder
+**Product:** Rust PathFinder  
+**Type:** Cross-platform desktop simulator for grid-based autonomous exploration and cell-action coverage  
+**Target platforms:** Windows and Linux  
+**Implementation:** Rust, with shared simulation and navigation logic and native platform UI
 
-### Product type
-Desktop prototype for a grid-based backyard mapping and navigation experience.
+Rust PathFinder displays an editable, bounded grid and one simulated vehicle. Users can drive it manually or run an autonomous Navigator. The Navigator operates with limited forward observation, incrementally builds its own map without knowing the environment's dimensions, prefers systematic alternating straight passes, explores unobserved areas, and records actual travel and the completion state of an action for each reachable free cell.
 
-### Status
-Interactive prototype with working File menu commands (New, Save, Load, recent files, Exit), mouse-based map editing, a configurable grid size and vehicle start, obstacles that block the vehicle, and a color legend.
+This document is the **complete product specification** for the target application, not a record of incremental modifications. Requirements apply to the finished version even if some capabilities are not yet implemented. Version history belongs exclusively in `changelog.md`.
 
-### Summary
-Rust PathFinder is a small desktop application that displays a grid (20 x 20 by default, configurable from 2 to 100 rows and columns) and a simulated vehicle. The user can move the vehicle one cell at a time using arrow keys, obstacles block it, and the user can observe the current row, column, and heading in a status area. The user can also edit the map with the mouse, choose the map size and where the vehicle starts, start a blank map, save or load maps as `.map` files, and reopen recently used maps from the File menu. A legend explains the map colors. The current implementation does not yet provide route planning or autonomous navigation.
+## 2. Goals and scope
 
-## 2. Problem and opportunity
+### 2.1 Goals
 
-Users exploring early concepts for a backyard mapping or navigation tool need a simple, visual proof of concept that demonstrates a map grid, a vehicle model, and discrete movement controls. A small prototype with clear keyboard interaction and cross-platform native framing provides a foundation for future features such as obstacle handling, map editing, and route planning.
+- Provide an editable grid-based simulated environment of 2–100 rows and columns, default 20 × 20.
+- Display one vehicle, its cell position, and its cardinal heading.
+- Preserve manual movement, map editing, JSON `.map` save/load, recent files, and native Windows/Linux interfaces.
+- Introduce an autonomous `navigator` that observes only up to three consecutive cells directly ahead and cannot inspect the entire simulator map.
+- Let a user classify newly observed unknown cells as `Free`, `Obstacle`, or `Boundary` through a UI dialog.
+- Discover both terrain contents and navigable boundaries without exposing grid dimensions to the Navigator.
+- Execute at most one cell movement per decision cycle, with validated movement feedback.
+- Prefer orderly alternating parallel passes while allowing detours, exploration, and backtracking.
+- Track all actual cell entries in order, including repeated visits; independently track a per-cell `action_completed` boolean.
+- Offer continuous execution, individual Step execution, pause, session reset, and map reset.
+- Finish only when the accessible area has been sufficiently explored and every reachable free cell has `action_completed = true`.
 
-This prototype exists to validate the interaction model and platform structure before investing in more advanced product behavior.
+### 2.2 Not in scope
 
-## 3. Product goals
+Real cameras, sensor drivers, physical robot control, GPS, odometry, motion physics, batteries and charging, multiple vehicles, persistent Navigator knowledge between launches, complete up-front route optimization, route-to-destination UI, external map imports, and advanced map editing (undo and brush tools).
 
-- Display a clear grid with distinct terrain states, 20 x 20 by default and resizable by the user from 2 to 100 rows and columns.
-- Show exactly one simulated vehicle at a time.
-- Allow the user to move the vehicle in discrete steps using keyboard input.
-- Keep vehicle movement bounded within the map and out of obstacle cells.
-- Let the user choose where the vehicle starts and which way it faces.
-- Present state information in a platform-native status area.
-- Let the user start a blank map and save and reload maps as `.map` files in a documented JSON format.
-- Let the user reopen recently used maps directly from the File menu.
-- Let the user mark cells as obstacles or unknown terrain with the mouse in an explicit edit mode.
-- Explain the map colors with an on-screen legend.
-- Provide a native desktop shell on both Windows and Linux using the same shared app logic.
-- Establish an extensible Rust foundation for future plotting, map editing, and navigation features.
+## 3. Terminology and data ownership
 
-## 4. Non-goals
+| Term | Definition |
+|---|---|
+| **Simulator map** | Authoritative finite grid used for rendering, terrain editing, movement collision checks, and `.map` files. The Navigator cannot query it wholesale. |
+| **Discovered map** | Navigator-owned, expandable knowledge indexed by signed relative cell coordinates. Initially only the starting cell is known. |
+| **Terrain state** | `Unknown`, `Free`, `Obstacle`, or `Boundary`. Only `Free` permits autonomous entry. |
+| **Observation** | Up to three forward cells, one cell wide, stopping at an obstacle or boundary. |
+| **Travel history** | Chronological list of cells actually occupied following successful translations; repeated entries are retained. |
+| **Action state** | `action_completed: bool` per discovered free cell: `true` means the cell's intended action was performed; `false` means it was not. |
+| **Action enabled** | Session-level `action_enabled: bool` controlling whether entering a free cell completes its action. Default `true` in the initial version. |
+| **Coverage** | Completion of the intended action on all reachable free cells, not simply observing or visiting them. |
+| **Exploration frontier** | A reachable known-free cell and heading from which unknown terrain may still be observed. |
+| **Session** | A single run's execution state, ordered travel history, and per-cell action completion status. |
 
-The current prototype does not include:
+### 3.1 Coordinates
 
-- Obstacle avoidance (obstacles block moves, but nothing steers the vehicle around them)
-- Editing tools beyond marking cells as obstacle or unknown (for example free terrain, undo, or brushes)
-- Persistent storage of the vehicle's current position (map files store the terrain, the map size, and the vehicle's start)
-- Autonomous route planning or destination selection
-- Real-world navigation physics or scale
-- Multiple vehicles or mission management
-- Advanced accessibility controls beyond the current UI shell
+- Simulator map coordinates use zero-based `(row, column)` with `(0, 0)` at the upper left; row increases down, column increases right.
+- The UI displays rows and columns starting at 1 for the finite simulator grid.
+- The Navigator uses signed relative `(row, column)` coordinates with its initial position `(0, 0)`, independent of the simulator's absolute start. `Up = (-1, 0)`, `Right = (0, 1)`, `Down = (1, 0)`, and `Left = (0, -1)`.
+- The integration layer translates between relative and absolute coordinates; the Navigator must not receive finite grid dimensions or undiscovered cells.
 
-## 5. Target users
+### 3.2 Terrain and action model
 
-- Developers prototyping grid-based map or navigation interactions
-- Users evaluating a simple visual representation of a vehicle moving within a bounded map
-- Early design stakeholders validating the interaction model before feature expansion
+| Terrain | Autonomous traversal | Action state |
+|---|---|---|
+| Unknown | Forbidden until inspected | Not applicable / not completed |
+| Free | Permitted | `action_completed` initially `false` |
+| Obstacle | Forbidden | Not applicable |
+| Boundary | Forbidden | Not applicable |
 
-## 6. User experience
+`Boundary` is a separately remembered non-traversable observation. The outer simulator edge acts as a boundary even though it lies outside its last valid cell; in-grid boundary cells may also be configured. The Navigator does not infer an entire boundary line from a single observation.
 
-### 6.1 Startup
+## 4. User experience
 
-On launch, the application opens a desktop window titled with the size of the map, "20 x 20 Grid". The window contains a native menu bar, a central grid visualization, a legend panel, and a status area at the bottom.
+### 4.1 Startup and visual layout
 
-The initial view shows a deterministic sample terrain map and a single vehicle positioned in the bottom-center cell facing upward.
+- Open a native desktop window titled `<rows> x <columns> Grid` (initially `20 x 20 Grid`).
+- Show a centered, proportionally scaled grid, exactly one vehicle, a terrain/action legend, a status area, and Navigator controls.
+- Begin with a deterministic sample terrain grid, a vehicle in the bottom-center cell facing Up, manual controls available, and the Navigator in `Idle` state.
+- Render the vehicle as a red body with a black triangular heading marker. Display Free green, Obstacle brown, Unknown gray, and Boundary in a distinct fourth color. Visually distinguish cells where `action_completed` is true and overlay the actual traveled path without obscuring the vehicle.
+- Make available a view of the Navigator's **discovered map**, distinct from the full simulator/environment view. Discovery visualization must not accidentally reveal hidden simulator cells to the Navigator logic.
 
-### 6.2 Grid and terrain
+### 4.2 Manual vehicle controls
 
-The map is a grid of 2 to 100 rows and 2 to 100 columns. It starts as a 20 x 20 grid, and the user can change its size (see 6.9). The grid is drawn as large as fits in the window, so larger maps have smaller cells. Each cell is rendered with a border and a fill color representing its terrain:
+| Input | Result |
+|---|---|
+| Up | Move forward one cell along heading |
+| Down | Move backward one cell |
+| Left | Turn 90° counterclockwise in place |
+| Right | Turn 90° clockwise in place |
+| Escape while grid has focus | Close application, except while a modal dialog owns focus |
 
-- Free terrain: green
-- Obstacle terrain: brown
-- Unknown terrain: gray
+- Manual translation is limited to the simulator grid. `Obstacle` and `Boundary` block movement; an out-of-grid move is blocked by the edge.
+- Manual movement may enter a simulator `Unknown` cell, preserving the simulator's manual-driving semantics. **Autonomous** movement may not enter unknown cells.
+- Turns never change the occupied cell. Failed translations never change vehicle position.
+- The UI reports blocked movements and maintains row, column, and heading.
+- Manual driving is disabled while automatic navigation is Running or Inspecting. Manual movement outside an autonomous session does not silently modify that session's travel history or action results; starting or resuming a session must use synchronized position/heading (see FR-16).
 
-The map is generated deterministically on startup as a visual demonstration. The user can edit it with the mouse (see 6.7) or replace it with a blank map or a previously saved map from the File menu (see 6.6). A legend explains the colors (see 6.8).
+### 4.3 File, Map, and About menus
 
-### 6.3 Vehicle behavior
+- **File:** New, Save, Load, up to nine recent map files, Clear Recent Files, Exit.
+- **Map:** Edit, Grid Size… .
+- **About:** Native informational dialog.
+- A **Navigator** control area provides Start, Pause, Step, Reset Session, Reset Map, execution status, the inspection dialog, and progress feedback. The exact platform-native widget arrangement may differ between Windows and Linux.
 
-The vehicle is represented as a red body with a black triangular indicator showing heading direction. The car occupies one grid cell at a time and can be moved with discrete keyboard actions:
+### 4.4 Editing the simulator map
 
-- Up arrow: move forward one cell along current heading
-- Down arrow: move backward one cell opposite current heading
-- Left arrow: rotate 90 degrees counterclockwise in place
-- Right arrow: rotate 90 degrees clockwise in place
-- Escape: close the application when the grid has keyboard focus
+- Map → Edit toggles editing; it shows a check mark when active, draws grid lines orange, and reports `Editing` in the status area.
+- Left-click paints `Obstacle`, right-click paints `Unknown`; dragging with the corresponding mouse button applies the value across cells. A separate selection or context control must also permit setting `Free` and `Boundary` so all four cell states can be authored without interfering with existing left/right shortcuts.
+- Editing does not move or rotate the vehicle; arrow-key movement is disabled in edit mode.
+- Editing is allowed only when the Navigator is Idle or Paused. Any edit that changes terrain relevant to a learned map invalidates conflicting Navigator knowledge; require Reset Map before autonomous execution resumes. The UI must clearly prompt this reset rather than silently using stale knowledge.
+- The simulator's occupied start/current cell must remain traversable: if a map edit would make it non-free, reject the edit or normalize it to Free with clear feedback.
+- Outside edit mode, clicks do not modify terrain. Edits remain in memory until explicitly saved.
 
-Movement is clamped to the map edges. Attempted movement beyond the edge leaves the vehicle in place.
+### 4.5 Grid size and vehicle start
 
-Obstacles block the vehicle: a forward or backward move into an obstacle cell leaves the vehicle in place, and the status area shows "Blocked by an obstacle" until the next move or turn. Unknown terrain does not block the vehicle, and turning in place is always possible. While the map is in edit mode, the arrow keys do nothing (see 6.7).
+- Map → Grid Size… presents rows and columns (each 2–100), 1-based start row/column, and Up/Right/Down/Left start heading. Populate with current values.
+- OK/Enter validates and applies; Cancel/Escape/window close leaves everything unchanged. Invalid numbers, bounds, or start coordinates keep the dialog open with an explanatory message.
+- Resize from the top-left: retain overlapping terrain, set newly created cells to Unknown, drop cells beyond the new edge, move vehicle to configured start/heading, and normalize the start cell to Free if necessary.
+- Change the window title and all related drawing, movement, and file behavior to the new dimensions.
+- Changing grid dimensions or start settings resets Navigator map and session state, because the simulator/relative-coordinate relationship has changed.
 
-### 6.4 Menu experience
+### 4.6 Map file commands
 
-The application exposes native File, Map, and About menu groups. File → New, Save, and Load work with map files (see 6.6), the File menu lists recent files (see 6.10), and File → Exit closes the application. About opens a native informational dialog. Map → Edit turns edit mode on and off (see 6.7), and Map → Grid Size... changes the size of the map and the vehicle start (see 6.9).
+- **New:** Make all cells Unknown, preserving the current dimensions and vehicle's current position/heading; ensure the occupied cell remains Free. Reset the Navigator map/session because the environment has changed.
+- **Save:** Native save dialog defaulting to `untitled.map`, confirm overwrite, write terrain, size, and configured vehicle start (not live position) as JSON.
+- **Load:** Native open dialog; validate complete file before replacing anything, restore terrain/dimensions/configured start, position the vehicle at start, and reset Navigator map/session.
+- Cancellation and failed read/write/validation leave application data unchanged and display an explanatory file-specific error for failures.
+- Files use `.map`. A successful load/save updates recent files.
 
-### 6.5 Status output
+### 4.7 Observation and inspection dialog
 
-The status area reports the current vehicle state as:
+- Observation is restricted to the three directly forward cells. The Navigator cannot ask for diagonal, side, rear, or global map scans.
+- Process visible cells nearest-first; stop at the first cell discovered or classified as Obstacle or Boundary.
+- A previously known Free cell requires no dialog; a previously known Obstacle/Boundary stops the scan.
+- For each visible Unknown cell, issue an inspection request identifying its relative cell coordinate. The UI displays `Free`, `Obstacle`, or `Boundary` choices, and the Navigator enters `Inspecting` without moving.
+- In the prototype, a selected classification is the observation result and must be applied consistently to the discovered map and the simulated environment when inspecting an unknown in-grid simulator cell. An out-of-grid observation is reported as Boundary automatically and does not create an out-of-grid simulator cell.
+- A classification that conflicts with an already defined non-unknown simulator obstruction must not override simulator collision safety. If discovered information proves incorrect, invalidate that cell's free classification and request reconciliation before another attempt.
+- The inspection dialog is modal for the observation; canceling or dismissing it keeps the vehicle stationary and pauses execution with the request unresolved. Resume reopens/reissues that request.
+- The observation interface must be replaceable by a future sensor implementation without importing UI code into the Navigator.
 
-- Ready
-- Row
-- Column
-- Heading
+### 4.8 Autonomous operation and Step mode
 
-The displayed state updates after movement or rotation. After a move blocked by an obstacle, "Blocked by an obstacle" replaces "Ready". In edit mode, "Editing" and a reminder of the mouse actions replace "Ready".
+- **Start:** Begin/resume continuous navigation from a synchronized state.
+- **Pause:** Stop scheduling new navigation actions; preserve discovered map, history, and coverage.
+- **Step:** While not Running, advance exactly one atomic Navigator event (one inspection request, one classification processing event, one turn, or one-cell translation), so actions are debuggable; if waiting for inspection, input resolves that event before further movement.
+- **Reset Session:** Stop; reposition vehicle to configured start and heading; clear travel history and all `action_completed` values; retain discovered terrain; initialize the starting cell in travel history. Navigator becomes Idle.
+- **Reset Map:** Perform Reset Session, then erase learned terrain and reinitialize only the starting cell as known Free. Does not alter underlying simulator terrain.
+- Continuous mode uses the identical decision logic as Step mode, automatically scheduling successive events while Running. UI updates and inspection dialogs must remain responsive.
+- Display `Idle`, `Running`, `Paused`, `Inspecting`, `Completed`, or `Blocked` states. `Blocked` indicates the Navigator cannot resolve a safe next action, not a successful end of the mission.
 
-### 6.6 Map files
+### 4.9 Travel history and action completion
 
-- **New** immediately replaces the map with a blank one of the same size in which every cell is unknown. The vehicle stays where it is.
-- **Save** opens the platform's native save dialog, suggests the name `untitled.map`, asks before overwriting an existing file, and writes the current map as JSON.
-- **Load** opens the platform's native open dialog, replaces the current map with the map stored in the chosen file, and puts the vehicle at the map's start.
-- Map files use the `.map` extension, and both dialogs list `.map` files by default.
-- Map files store the terrain, the size of the map, and the vehicle's start cell and heading as chosen with Map → Grid Size... (see 6.9), not the vehicle's current position. Files written before maps had a start still load, with the vehicle in the bottom-center cell facing up.
-- A file that is saved or loaded successfully moves to the top of the recent files (see 6.10).
-- If a file cannot be written, read, or validated, the application shows an error dialog and keeps the current map.
-- Canceling a dialog leaves everything unchanged.
+- Store travel as an ordered array of relative `(row, column)` positions, beginning with the session's starting position; append once after each **successful translation**, even when revisiting a cell. Turning and failed moves do not append.
+- Maintain `action_completed: bool` independently for each known Free cell. It defaults to `false` when a Free cell is discovered, unless the current action is performed there.
+- The session has `action_enabled: bool` (default `true`). On successfully entering a Free cell with `action_enabled = true`, set its `action_completed = true`; otherwise leave it unchanged. The starting cell is evaluated at session initialization: when action is enabled, its action is performed and `action_completed` becomes true without a movement-history duplicate.
+- Repeat visits do not set `action_completed` back to false. Discovering a cell is not the same as performing its action.
+- Expose a read-only snapshot of ordered travel and cell action flags to both desktop UIs. Progress may report completed known-Free cells versus total known-Free cells, but that ratio is provisional while exploration remains.
 
-### 6.7 Map editing
+### 4.10 Execution states and completion
 
-- **Map → Edit** turns edit mode on; selecting it again turns it off. The menu item shows a check mark while edit mode is on.
-- While editing, the grid lines turn orange and the status area starts with "Editing", so the mode is always visible.
-- In edit mode, a left click on a cell makes it an obstacle and a right click makes it unknown. Holding a button while moving the pointer applies the same change to every cell the pointer crosses.
-- Outside edit mode, mouse clicks do not change the map.
-- Editing never moves or turns the vehicle, and the vehicle is parked in edit mode: the arrow keys do nothing until edit mode is turned off. The vehicle stays drawn over its cell, so an edit to that cell shows once the vehicle moves away.
-- Edits are kept in memory until the user saves the map with File → Save.
+| State | Meaning |
+|---|---|
+| Idle | Navigator initialized but not executing |
+| Running | Automatically processing observation/decision/action events |
+| Paused | Session can resume or be stepped |
+| Inspecting | Waiting for a cell classification |
+| Completed | All reachable Free cells have completed actions and no reachable observation frontier remains |
+| Blocked | Unable to continue safely or determine a valid continuation; intervention needed |
 
-### 6.8 Legend
+Completion requires **both**: (1) all discovered reachable Free cells have `action_completed = true`, and (2) all reachable observation frontiers are exhausted so no additional reachable unknown cells can be revealed by looking from any reachable known-Free cell in a cardinal heading. Non-reachable unknown areas do not prevent completion. The Navigator must not infer completion simply because its preferred straight pass ends or because the last three forward cells are blocked.
 
-A legend panel between the grid and the status area shows a color sample and a label for free, obstacle, and unknown terrain and for the vehicle, using the same colors as the grid.
-
-### 6.9 Grid size and vehicle start
-
-- **Map → Grid Size...** opens a modal dialog, filled with the current values, with two groups of fields:
-  - Grid size: the number of rows and columns, each from 2 to 100.
-  - Car start: the start row and column, counted from 1 at the top-left corner like the status area, and the heading (Up, Right, Down, or Left) chosen from a list.
-- OK (or Enter) applies the settings; Cancel, Escape, or closing the dialog leaves everything unchanged.
-- If a value is missing, not a whole number, or out of range, a message explains what to correct and the dialog stays open with the values entered.
-- Applying the settings resizes the map from its top-left corner: cells that still fit keep their terrain, new cells are unknown, and cells beyond the new edges are dropped. The vehicle moves to the start cell and faces the chosen heading. If the start cell is an obstacle, it becomes free so the vehicle never starts inside an obstacle.
-- The window title shows the new size, for example "30 x 40 Grid", and every feature (drawing, movement limits, editing, saving, and loading) uses the new size.
-- The size and the start are saved with the map (see 6.6).
-
-### 6.10 Recent files
-
-- Following the convention of Microsoft Word and Excel, the File menu lists the most recently saved or loaded map files between Load and Exit, newest first, numbered 1 to 9 so each number is an access key. Long paths are shortened in the middle.
-- Choosing a recent file loads it like File → Load.
-- Saving or loading a file moves it to the top of the list; a file is never listed twice, and the list keeps at most 9 files.
-- If a recent file no longer exists, choosing it shows an error and removes it from the list.
-- **Clear Recent Files**, shown below the list when it is not empty, empties the list.
-- The list is kept between sessions in the user's configuration folder.
-
-## 7. Functional requirements
+## 5. Functional requirements
 
 ### FR-1: Grid display
-1. The application shall display a grid of 2 to 100 rows by 2 to 100 columns, 20 x 20 at startup (FR-10).
-2. Each cell shall render with a visible border and a terrain-specific fill color.
-3. The app shall generate a deterministic sample map on startup.
-4. The grid shall be centered within the window and resize proportionally with the window.
+1. Render 2–100 rows by 2–100 columns, default 20 × 20, with borders and scalable cells.
+2. Generate a deterministic sample simulator map at startup.
+3. Show all four terrain states with legend-matched colors.
+4. Overlay vehicle, action-completion state, and travel history; permit separate full-environment and discovered-map views.
 
 ### FR-2: Vehicle display
-1. The application shall display exactly one simulated vehicle.
-2. The vehicle shall occupy one grid cell.
-3. The vehicle shall be drawn with a red body and black heading indicator.
-4. The initial vehicle shall be in the bottom-center cell and face upward. After Map → Grid Size... or File → Load, it shall be at the map's start (FR-7, FR-10).
+1. Show exactly one vehicle in one cell, red with a heading indicator.
+2. Default start to bottom-center facing Up; respect configured or loaded start.
+3. Display current row, column, and heading and update after actions.
 
-### FR-3: Vehicle movement and turning
-1. An up-arrow press shall move the vehicle forward one cell in the current heading.
-2. A down-arrow press shall move the vehicle backward one cell opposite the current heading.
-3. A left-arrow press shall rotate the vehicle 90 degrees counterclockwise in place.
-4. A right-arrow press shall rotate the vehicle 90 degrees clockwise in place.
-5. Vehicle movement shall not extend beyond the grid boundaries.
-6. Movement attempts beyond the grid edge shall leave the vehicle in place.
-7. Turning shall not change the vehicle's cell position.
-8. A forward or backward move into an obstacle cell shall leave the vehicle in place, and the status area shall report it (FR-6). Unknown cells shall not block the vehicle.
-9. In edit mode, the arrow keys shall not move or turn the vehicle (FR-8).
+### FR-3: Simulator driving
+1. Support `Forward`, `Reverse`, `TurnLeft`, and `TurnRight` with one-cell translations and 90° turns.
+2. Reject translation into Obstacle, Boundary, or beyond grid edges; leave vehicle unchanged and return a specific result.
+3. Preserve manual entry into Unknown; forbid autonomous entry into Unknown in the Navigator.
+4. Turns shall not change cell position; simulator feedback shall distinguish moved, turned, collision, and outer-edge conditions.
 
-### FR-4: Application lifecycle
-1. The application shall launch in a native desktop window.
-2. The application shall close when the user presses Escape while the grid has focus.
-3. The application shall display startup errors to standard error and exit with a non-zero result if it fails to initialize.
-4. Selecting File → Exit shall close the application, including all of its windows.
+### FR-4: Lifecycle
+1. Start in a native desktop window on Windows and Linux.
+2. Support File → Exit and Escape when the grid is focused and no modal owns focus.
+3. Write initialization errors to standard error and exit nonzero on startup failure.
 
-### FR-5: Menus
-1. The application shall show File, Map, and About menu entries.
-2. File shall include New, Save, Load, the recent files and Clear Recent Files (FR-11), and Exit.
-3. Map shall include Edit and Grid Size... (FR-10).
-4. About shall open a native informational dialog directly.
-5. Map → Edit shall turn edit mode on and off as described in FR-8, and Map → Grid Size... shall behave as described in FR-10.
-6. File → New, Save, and Load shall behave as described in FR-7, and File → Exit as described in FR-4.
+### FR-5: Menus and controls
+1. Provide File, Map, and About menus and Navigator controls described in section 4.
+2. Implement native dialogs for About, map file operations, grid settings, and inspection.
+3. Prevent conflicting manual/edit/autonomous interactions.
 
-### FR-6: Status area
-1. The application shall display a status area beneath the grid.
-2. The status area shall report the vehicle's row, column, and heading.
-3. Status text shall update after movement or turning.
-4. In edit mode, the status text shall start with "Editing" and the mouse actions instead of "Ready".
-5. After a move blocked by an obstacle, the status text shall start with "Blocked by an obstacle" instead of "Ready" until the next move or turn.
+### FR-6: Status and feedback
+1. Show current row, column, heading, editing status, and blocked manual moves.
+2. Show Navigator execution state, current action/inspection request, and provisional coverage progress.
+3. Reflect each confirmed movement, turn, inspection response, and state transition promptly.
 
-### FR-7: Map files
-1. File → New shall set every cell of the map to unknown, keeping the size of the map.
-2. File → Save shall open a native save dialog that suggests the name `untitled.map` and write the current map, its size, and the vehicle start to the chosen file as JSON that conforms to `schemas/map.schema.json`.
-3. File → Load shall open a native open dialog, replace the current map with the map stored in the chosen file (including its size), and put the vehicle at the stored start, or in the bottom-center cell facing up when the file has no start.
-4. New and Save shall not change the vehicle's position or heading. Map files shall store the vehicle's start, not its current position.
-5. Loading shall reject files that are not valid JSON, declare an unsupported format version, contain unknown properties or cell values, have rows or columns that do not match their declared size, have fewer than 2 or more than 100 rows or columns, or place the start outside the map.
-6. When a file cannot be written, read, or validated, the application shall show an error dialog naming the file and the problem, and keep the current map.
-7. Canceling the save or open dialog shall leave the map unchanged.
-8. Map files shall use the `.map` extension, and the save and open dialogs shall list `.map` files by default.
-9. The application shall write format version 2 and keep loading version 1 files, which have no start.
+### FR-7: Map files and validation
+1. Save and load `.map` JSON using `schemas/map.schema.json` (JSON Schema draft 2020-12).
+2. Store size, terrain, and configured start, not live vehicle position, travel history, or Navigator knowledge.
+3. Write **formatVersion 3** with terrain values `free`, `obstacle`, `unknown`, and `boundary`.
+4. Continue accepting legacy versions 1 (without start) and 2 (three terrain states), with documented defaults.
+5. Reject invalid JSON, unknown properties/states, unsupported versions, invalid sizes, invalid cell arrays, or out-of-range starts, without altering the active map.
+6. Include `$schema` in saved files and verify codec/schema compatibility through automated tests.
 
 ### FR-8: Map editing
-1. Map → Edit shall turn edit mode on when it is off and off when it is on, and the menu item shall show a check mark while edit mode is on.
-2. While edit mode is on, the grid lines shall be drawn in a distinct edit color (orange) and the status area shall indicate edit mode (FR-6).
-3. In edit mode, a left click on a cell shall make it an obstacle, and a right click shall make it unknown.
-4. Holding a mouse button while moving the pointer shall apply the same change to every cell the pointer crosses.
-5. Outside edit mode, mouse clicks shall not change the map.
-6. Editing shall not move or turn the vehicle, and the vehicle shall remain drawn over its cell.
-7. File → New and File → Load shall keep the current edit mode.
-8. In edit mode, the arrow keys shall not move or turn the vehicle.
+1. Toggle checked edit mode, orange grid lines, and Editing status.
+2. Preserve left-click Obstacle and right-click Unknown, with dragging supported.
+3. Provide an additional clear control for Free and Boundary editing.
+4. Disable motion during editing and invalidate/reinitialize stale Navigator knowledge before resumption.
+5. Keep occupied cell traversable.
 
-### FR-9: Legend
-1. The application shall show a legend panel between the grid and the status area.
-2. The legend shall show a color sample and a label for free, obstacle, and unknown terrain and for the vehicle, using the colors drawn on the grid.
+### FR-9: Legend and visualization
+1. Show all four terrain colors and vehicle symbol.
+2. Show distinct styles for `action_completed = true`, the traveled route, and the Navigator's discovered/undiscovered terrain.
+3. Keep visualization consistent across Windows and Linux.
 
-### FR-10: Grid size and vehicle start
-1. Map → Grid Size... shall open a modal dialog with fields for the number of rows and columns, the start row and column, and the start heading, filled with the current values.
-2. Start rows and columns shall be entered counting from 1, and the heading shall be chosen from Up, Right, Down, and Left.
-3. OK and Enter shall apply the settings; Cancel, Escape, and closing the dialog shall change nothing.
-4. The dialog shall accept only whole numbers of rows and columns from 2 to 100, and a start cell inside the map. Otherwise it shall explain what to correct and stay open.
-5. Applying the settings shall resize the map from its top-left corner, keeping the terrain of cells that still fit and making new cells unknown.
-6. Applying the settings shall move the vehicle to the start cell with the chosen heading, and shall make the start cell free if it is an obstacle.
-7. The window title shall show the map size as "<rows> x <columns> Grid".
-8. Drawing, movement limits, editing, and map files shall all use the current map size.
+### FR-10: Grid configuration
+1. Allow rows/columns 2–100 and start row/column/heading through a validated modal dialog.
+2. Resize retaining top-left overlap, adding Unknown cells, dropping out-of-bounds cells.
+3. Reposition vehicle to valid Free start, update title and file metadata, and reset Navigator knowledge/session.
 
 ### FR-11: Recent files
-1. The File menu shall list up to 9 recently saved or loaded map files, newest first, numbered 1 to 9 with the number as access key.
-2. Choosing a recent file shall load it as described in FR-7.
-3. Saving or loading a file shall move it to the top of the list without listing it twice.
-4. Choosing a recent file that no longer exists shall show an error and remove it from the list.
-5. File → Clear Recent Files shall empty the list, and shall be shown only when the list is not empty.
-6. The list shall persist between sessions in the user's configuration folder (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
+1. Maintain up to nine recent files, newest first, deduplicated and numbered 1–9 in File menu.
+2. Handle missing files by showing an error and removing the missing entry.
+3. Provide Clear Recent Files when nonempty.
+4. Persist list in `%APPDATA%/rust_pathfinder` on Windows or `$XDG_CONFIG_HOME/rust_pathfinder` (default `~/.config/rust_pathfinder`) on Linux.
 
-## 8. Non-functional requirements
+### FR-12: Restricted forward observation
+1. Observe up to three consecutive cells directly ahead, one-cell width, with no sideways/rear sensing.
+2. Stop observation at the first Obstacle or Boundary.
+3. Process unknown cells nearest-first and request classification before traversal.
+4. Never expose whole simulator map or its dimensions to Navigator decision-making.
 
-### NFR-1: Cross-platform compatibility
-The application shall support both Windows and Linux with OS-native windowing and menu conventions.
+### FR-13: Discovered map
+1. Store learned terrain in a dynamically expandable, sparse map of signed relative coordinates.
+2. Initially know only the starting cell as Free and starting heading.
+3. Track Free, Obstacle, Boundary, and Unknown; allow repeated observations to reuse known classifications.
+4. Preserve learned map through Reset Session and clear on Reset Map.
+5. Keep learned knowledge in memory only for this version.
 
-### NFR-2: Deterministic rendering
-The initial map and vehicle state shall be deterministic across launches for prototype consistency.
+### FR-14: Observation/classification integration
+1. Represent unknown observation as a request/response interaction, independent of UI implementation.
+2. Display Free/Obstacle/Boundary choices while vehicle remains stationary.
+3. Apply observation results to learned map and consistent simulated terrain when applicable.
+4. Report the simulator's outer edge as Boundary without revealing overall dimensions.
+5. Never bypass simulator collision constraints on contradictory responses.
 
-### NFR-3: Performance
-The app must remain responsive for grids of up to 100 x 100 cells and a single vehicle in a desktop environment.
+### FR-15: Incremental navigation strategy
+1. Prefer straight movement in the current pass direction and adjacent alternating parallel passes.
+2. Make local decisions using discovered terrain, vehicle heading, previous travel, and action status; do not precompute the entire environment route.
+3. On a blocked preferred pass, select a safe turn/detour or switch to exploration.
+4. Permit revisiting known Free cells to reach unfinished areas.
+5. Avoid indefinite nonproductive loops through progress tracking or a detectable Blocked state.
 
-### NFR-4: Maintainability
-The app shall keep map, vehicle, rendering, and platform shell logic separated so future capabilities can be added without rewriting the core behavior.
+### FR-16: Safe atomic execution
+1. Execute at most one successful cell translation per movement event.
+2. Observe/inspect necessary unknown cells before entering them.
+3. Send actions through the simulator's standard command interface; consume the returned outcome.
+4. Append travel/complete cell action only after a successful translation.
+5. On failed movement, do not record travel; invalidate inconsistent learned terrain and reevaluate.
+6. Keep Simulator and Navigator positions/headings synchronized; initiating autonomous navigation after manual repositioning shall establish a fresh session anchored at the current pose or require Reset Session, never silently reuse an inconsistent pose.
 
-### NFR-5: Prototype clarity
-The implementation shall make it clear that route planning is not yet included.
+### FR-17: Exploration/backtracking
+1. Actively search for reachable frontiers and reachable Free cells with `action_completed = false`.
+2. Travel through previously visited Free cells to reach those targets.
+3. Resume a systematic coverage pass whenever practical.
+4. Distinguish unreachable areas and exhaustion of observation frontiers from temporary dead ends.
+5. A discovered graph of traversable cells may be used for local navigation to a selected target; a precomputed global coverage tour is not required.
 
-### NFR-6: Documented map file format
-The map file format shall be defined by a standalone JSON Schema (draft 2020-12) in `schemas/map.schema.json`, separate from the application code. Saved files shall reference the schema through `$schema` and carry a `formatVersion` so the format can evolve, and automated tests shall check that the code and the schema agree.
+### FR-18: Travel and action tracking
+1. Maintain a chronological vector of visited relative cell coordinates, including duplicates.
+2. Initialize the vector with the starting cell and append only on successful translations.
+3. Maintain independent per-Free-cell `action_completed: bool`, initially false.
+4. When `action_enabled` is true, mark the entered Free cell complete; do not clear completion on revisits.
+5. Evaluate the starting cell's action on session initialization when action is enabled.
+6. Provide read-only history and action-state snapshots for rendering and tests.
 
-## 9. Acceptance criteria
+### FR-19: Execution modes and reset
+1. Implement Idle, Running, Paused, Inspecting, Completed, and Blocked states.
+2. Provide Start/Pause and one-event Step; both shall use the same decision logic.
+3. Pause for unresolved inspections without moving the vehicle.
+4. Reset Session clears travel/action status and returns to configured start while keeping learned terrain.
+5. Reset Map additionally clears discovered knowledge without modifying simulator terrain.
+6. Respond safely to map replacement, edit, resize, and loading by resetting or requiring reset before navigation resumes.
 
-1. Launching the application opens a window titled "20 x 20 Grid".
-2. The initial view shows a 20 x 20 map with a visible car in the bottom-center cell facing up.
-3. Pressing Up moves the car one cell forward without changing direction.
-4. Pressing Down moves the car one cell backward without changing direction.
-5. Pressing Left or Right rotates the car 90 degrees without moving its position.
-6. Pressing a movement key at the map edge does not move the car outside the grid.
-7. The status area shows the current row, column, and heading and updates after each input.
-8. Selecting Map → Edit turns edit mode on (check mark on the menu item, orange grid lines, and "Editing" in the status area), and selecting it again turns edit mode off.
-9. Escape closes the application when the grid has keyboard focus.
-10. The project compiles successfully in the target environment.
-11. Selecting File → New turns every cell unknown without changing the map size or moving or turning the car.
-12. Saving a map to a `.map` file and loading it again restores the same terrain, map size, and car start, and the saved file validates against `schemas/map.schema.json`.
-13. Loading a file that cannot be read or is not a valid map shows an error dialog and leaves the current map unchanged.
-14. Selecting File → Exit closes the application.
-15. In edit mode, left-clicking a cell makes it an obstacle and right-clicking makes it unknown, and dragging with a button held changes every cell crossed. Outside edit mode, clicks do not change the map.
-16. A legend between the grid and the status area shows the free, obstacle, unknown, and vehicle colors.
-17. Pressing Up or Down toward an adjacent obstacle leaves the car in place, and the status area shows "Blocked by an obstacle".
-18. In edit mode, the arrow keys neither move nor turn the car.
-19. Choosing Map → Grid Size... and entering 30 rows, 40 columns, start row 5, start column 10, and heading Left resizes the map to 30 x 40 (title "30 x 40 Grid") and puts the car at row 5, column 10, facing left. Entering a value out of range shows a message and keeps the dialog open, and Cancel changes nothing.
-20. After a map is saved or loaded, it is listed first among the recent files in the File menu; choosing it there loads it, the list survives a restart, and File → Clear Recent Files empties it.
+### FR-20: Completion determination
+1. Complete only when every discovered reachable Free cell has `action_completed = true` and no reachable observation frontiers remain.
+2. Stop issuing actions upon completion and preserve the result until reset.
+3. Report Blocked rather than Completed when further safe exploration/coverage cannot be established.
+4. Account for boundaries, obstacles, disconnected regions, and repeated travel.
 
-## 10. Product decisions and scope boundaries
+## 6. Navigation decision model
 
-This prototype intentionally does not decide:
+The Navigator runs an event-driven observe–classify–decide–execute–record loop. An event is either an observation/inspection request, a processed classification, a 90° turn, or one-cell translation. Its internal logical modes are **Coverage** (prefer straight, alternating passes) and **Exploration** (seek unfinished Free cells and observation frontiers). These logical modes are separate from UI execution states.
 
-- Whether maps should be imported from other formats
-- Whether route planning should be implemented
-- Whether the vehicle's current position should be saved with maps (maps store only its start)
-- Whether the app will become a full backyard-planning product or remain a visual simulation tool
+1. Read the current known position/heading and local discovered map.
+2. Inspect forward cells nearest-first, up to distance three; if an unknown requires user input, suspend in `Inspecting`.
+3. Prefer safe continuation of a systematic pass when there is useful action work or exploration in that direction.
+4. If blocked or the pass is exhausted, attempt a safe adjacent parallel pass.
+5. Otherwise select an outstanding unfinished reachable Free cell or observation frontier, navigate through known Free cells toward it (revisiting allowed), and resume coverage.
+6. Execute no more than one translation, or a single turn, and verify feedback before updating state.
+7. Continue until the completion criterion holds or safe progress cannot be made.
 
-Decided: obstacles block the vehicle's moves, unknown terrain does not, and the arrow keys are disabled in edit mode.
+An implementation may use graph search over **known Free cells** to reach a local target. It must not plan a full visit-all-cells tour using hidden global terrain. Deterministic tie-breaking must make tests reproducible. A visited cell with `action_completed = false` remains a coverage target; a Free cell whose action is complete may still be a transit cell.
 
-## 11. Future candidate enhancements
+### 6.1 Event/result contract
 
-These items are explicitly out of scope for the current prototype but may be valuable in future milestones:
+The Navigator interface should express, without depending on GTK/Win32, results equivalent to:
+- `RequestInspection(relative_cell)`;
+- `Drive(Forward | Reverse | TurnLeft | TurnRight)`;
+- `WaitForInspection`;
+- `StateChanged(state)`;
+- `MissionCompleted` or `UnableToProgress`.
 
-- Extend the map editor (free terrain, undo, larger brushes)
-- Add destination selection and route visualization
-- Add unknown-terrain behavior and pathfinding
-- Persist the vehicle's current position alongside maps
-- Add accessibility improvements
-- Expand the app into a broader navigation and planning product
+The integration layer provides classified observations and simulator drive outcomes. Exact Rust types and filenames are implementation choices; these behaviors and invariants are mandatory.
 
-## 12. Technical implementation context
+### 6.2 Observation limitations and boundary cases
 
-This section is intentionally separated from product requirements so the product intent remains clear.
+- A three-cell range is a **maximum**, not a command to translate three cells.
+- A cell obscured by a known obstacle/boundary cannot be inspected from that heading.
+- An outer-edge detection returns Boundary for the first inaccessible coordinate; farther out-of-grid positions are not exposed.
+- Unknown coordinates are not presumed safe. A known Free corridor may be used for a detour, but unknown terrain must first be classified.
+- A successful movement into a classified Free cell is still subject to Simulator collision verification.
 
-### Platform architecture
-- Linux: GTK 4-based window, menu bar (with a menu section for the recent files), keyboard and mouse handling, native file chooser, modal Grid Size window built from GTK widgets, legend panel built from GTK widgets, and Cairo rendering
-- Windows: Win32 window, native menu (rebuilt when the recent files change), keyboard and mouse handling, common Save and Open dialogs, modal Grid Size window built from standard controls, GDI-drawn legend panel, status bar, and GDI rendering
+## 7. Non-functional requirements
 
-### Core logic
-- The code is split into two modules. The simulator (`src/simulator/`) holds the map, the vehicle, and the driving rules, and knows nothing about windows, drawing, or input devices. The desktop interface (`src/ui/`) holds everything the user sees and touches, and uses only the items the simulator re-exports from `src/simulator/mod.rs`. The simulator never depends on the interface, so future modules such as autonomous driving can drive the vehicle through the same API.
-- Map generation, the grid, and the vehicle live in the simulator (`src/simulator/grid.rs`, `src/simulator/car.rs`).
-- The vehicle is driven with commands (forward, reverse, turn left, turn right). The simulation (`src/simulator/simulation.rs`) applies them: it keeps the vehicle on the map, lets obstacles block it, and reports what each command did. It also replaces, resizes, and edits the map and keeps the vehicle start. The arrow keys are one source of commands.
-- Rendering is performed from a shared pixel buffer so the app can paint the same visual state across platforms (`src/ui/render.rs`).
-- Edit mode, the mouse editing rules, the mapping from screen points to cells, the status text, and the legend entries live in the shared interface code (`src/ui/app.rs`, `src/ui/render.rs`) so both platforms behave the same.
-- The validation of the Grid Size dialog is shared (`src/ui/app.rs`); the simulation applies the resulting size and vehicle start, and each platform only builds the dialog.
-- The recent files list, including where it is stored, is shared (`src/ui/recent.rs`); each platform only shows it in its File menu.
-- Map files are encoded, decoded, and validated by the simulator (`src/simulator/map_file.rs`) using serde and serde_json. The format itself is defined separately in `schemas/map.schema.json`.
+**NFR-1 Cross-platform:** Identical core behavior and controls on Windows (Win32/GDI) and Linux (GTK 4/Cairo); platform-specific UI code remains isolated.
 
-### Current technical constraints
-- Maps have 2 to 100 rows and columns; larger maps are drawn with smaller cells to fit the window.
-- The map is deterministic and generated locally.
-- Maps persist only through explicit File → Save and File → Load; nothing is saved automatically.
-- The repo currently targets Linux and Windows desktop environments.
+**NFR-2 Determinism:** Sample map generation and Navigator action choices (for a fixed observation/classification sequence) must be reproducible.
 
-## 13. Requirements summary
+**NFR-3 Responsiveness:** Remain interactive with 100 × 100 simulator maps; continuous navigation must not block repainting, dialogs, or Pause.
 
-This product is a minimal visual prototype intended to prove the interaction model: a configurable grid, a single vehicle that obstacles block, native desktop framing, keyboard-driven movement, mouse-based map editing, and saving, loading, and reopening maps. It is not yet a full navigation application. The PRD is intentionally narrow and should remain so until advanced features are explicitly approved.
+**NFR-4 Separation:** Simulator owns environment and final movement outcome; Navigator owns learned map, exploration, history, action flags; UI owns presentation and inspection input. No circular module dependencies.
 
-## 14. Open questions
+**NFR-5 Data integrity:** Reject invalid map files without losing current state; never log a failed move as successful; reset learned state when backing environment changes.
 
-- Should the application become a map editor, a planner, or a simple simulator?
-- Is the target next milestone route planning or richer map editing?
-- Should the editor also mark cells as free, and should it offer undo?
-- Should Escape leave edit mode instead of closing the application?
-- Should File → Exit or closing the window ask before discarding unsaved map changes?
-- Should map files also store the vehicle's current position, in addition to its start?
-- Should resizing offer other anchors than the top-left corner, for example keeping the map centered?
-- Should the recent files list offer pinning, like Microsoft Office does?
+**NFR-6 Testability:** Core navigation/observation/coverage logic must be testable headlessly with scripted classifications and movement outcomes.
 
+**NFR-7 Schema compatibility:** Maintain a versioned standalone JSON Schema; write v3 and load valid v1/v2 files through explicit compatibility rules.
+
+**NFR-8 Prototype scope:** Learned map, travel history, and action-completion flags remain in memory; no implicit persistence on application exit.
+
+## 8. Acceptance tests
+
+### 8.1 Existing desktop and simulator behavior
+
+1. Startup shows a deterministic 20 × 20 map, a single vehicle at bottom-center facing Up, a legend, and a native window titled `20 x 20 Grid`.
+2. Arrow keys move one cell or turn 90°; obstacle, boundary, and edge collisions do not move the vehicle; status updates correctly.
+3. Manual Unknown traversal remains possible; editing disables manual controls.
+4. Editing obstacle/unknown by mouse drag works; Free/Boundary can also be configured explicitly.
+5. Grid Size validates inputs, resizes from top-left, updates start, and resets Navigator learned state.
+6. New/Save/Load and failure/cancel behavior work as specified.
+7. Saved v3 files validate against the updated JSON schema; legacy v1/v2 files load correctly.
+8. Nine-entry recent files list persists across launches and supports clearing and missing-file handling.
+9. Windows and Linux builds expose equivalent behavior; `cargo build` and `cargo test` succeed.
+
+### 8.2 Observation and discovery
+
+10. Starting a new Navigator map reveals only `(0,0)` and no map dimensions or hidden terrain.
+11. From a fixed heading, observation reaches at most three cells in one straight column and stops at first obstacle/boundary.
+12. Classifying an Unknown pauses motion, presents three choices, and updates the discovered map when answered.
+13. Canceling inspection leaves it unresolved and the vehicle stationary.
+14. Encountering an actual simulator edge records a Boundary observation without granting the Navigator grid dimensions.
+15. Discovered terrain is retained on Reset Session, erased on Reset Map, and never written to `.map` files.
+
+### 8.3 Movement, history and actions
+
+16. Each accepted translation advances exactly one cell; each turn stays in place.
+17. The ordered travel history begins with the start cell, contains repeated entries for revisits, and excludes turns/failed translations.
+18. On successful entry to a Free cell with `action_enabled = true`, `action_completed` becomes true. With action disabled, it stays false.
+19. A known Free cell can be visited with action still false; observations alone never mark action true.
+20. All autonomous attempted entries into Unknown, Obstacle, and Boundary are prohibited or blocked, and collision failures never produce false history.
+
+### 8.4 Navigation and session controls
+
+21. On an unobstructed reachable test area, the Navigator prefers alternating straight passes and ultimately completes actions on all Free cells.
+22. On a map with obstacles and a dead end, it detours or backtracks via known Free cells to explore and complete reachable regions.
+23. Both continuous Start/Pause and manual Step yield equivalent decisions given the same inputs; Step advances only one atomic event.
+24. A missing observation response pauses execution rather than guessing.
+25. Reset Session clears history and action flags but keeps terrain knowledge and returns the vehicle to configured start; Reset Map additionally erases knowledge.
+26. The Navigator reports Completed only when all reachable known Free cells have completed actions **and** all reachable observation frontiers are exhausted.
+27. An unreachable region does not prevent completion, but a temporarily blocked unexplored frontier must not be mistaken for successful completion.
+28. Detectable nonproductive cycles or inconsistent movement state produce a Blocked/error condition rather than unlimited movement.
+29. The UI shows execution state, progress, actual path, discovered knowledge, and boolean action completion without leaking hidden simulator information to Navigator logic.
+
+## 9. Technical architecture
+
+### 9.1 Project structure
+
+| Path | Responsibility |
+|---|---|
+| `src/simulator/` | Grid and terrain (`grid.rs`), vehicle (`car.rs`), simulation/drive results (`simulation.rs`), `.map` codec (`map_file.rs`) |
+| `src/navigator/` | Observation policy, expandable discovered map, navigation controller, local coverage/exploration strategy, travel history, action state |
+| `src/ui/` | Shared app state/presentation (`app.rs`), pixel-buffer rendering (`render.rs`), recent file list (`recent.rs`), GTK/Win32 windows and dialogs |
+| `src/main.rs` | Application startup and platform UI entry |
+| `schemas/map.schema.json` | Source of truth for `.map` JSON schema including v3 `boundary` terrain support |
+
+The simulator remains UI-free. The Navigator is UI-free and uses an abstract observation/movement contract. The UI/application coordination layer invokes Navigator decisions, shows inspection requests, submits classifications, drives the simulator, and returns feedback. Core state changes must not depend on platform widgets.
+
+### 9.2 Existing technical implementation context
+
+- Linux UI: GTK 4 menus, keyboard/mouse input, modal dialogs, native file chooser, legend, and Cairo rendering.
+- Windows UI: Win32 menus, keyboard/mouse input, modal dialogs, common file dialogs, legend/status controls, and GDI rendering.
+- Shared UI: pixel-buffer rendering, edit mode, screen-to-grid mapping, Grid Size input validation, and recent files.
+- Simulator: standard `Simulation::drive` commands and detailed outcomes. Extend terrain serialization/collision results for Boundary as necessary.
+- Map storage: `serde` / `serde_json`, `schemas/map.schema.json`; maintain backward-readable map files.
+- Repository uses Rust edition 2024; build and test with `cargo build` and `cargo test`.
+
+### 9.3 Map file contract (format version 3)
+
+Map file properties:
+
+- `$schema`: link to `schemas/map.schema.json`.
+- `formatVersion`: `3` for newly saved maps.
+- `rows`, `columns`: integers in `[2, 100]`.
+- `start`: `{ "row": <zero-based>, "column": <zero-based>, "heading": "up" | "right" | "down" | "left" }`.
+- `cells`: rectangular 2D array of `"free"`, `"obstacle"`, `"unknown"`, or `"boundary"`.
+
+Example:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/poivronjaune/rust_pathfinder/main/schemas/map.schema.json",
+  "formatVersion": 3,
+  "rows": 2,
+  "columns": 3,
+  "start": { "row": 1, "column": 2, "heading": "right" },
+  "cells": [
+    ["boundary", "obstacle", "unknown"],
+    ["free", "free", "free"]
+  ]
+}
+```
+
+Version 1 files lacking `start` default to bottom-center facing Up; version 2 files support the original three states. Version 3 makes Boundary a first-class simulator terrain value; outer grid edges are implicit boundaries and do not require extra array cells. The simulator and schema must reject any file that positions a vehicle on non-Free terrain, or normalize valid legacy cases according to an explicit, tested compatibility rule.
+
+### 9.4 State transitions and conflict rules
+
+- **Environment mutation** (New, Load, resize, edit) resets or invalidates Navigator knowledge. No autonomous execution may continue on stale terrain.
+- **Reset Session** affects only Navigator session data and vehicle pose, not the learned map or simulator terrain.
+- **Reset Map** affects Navigator knowledge and session, not simulator terrain or saved `.map` file.
+- **Classification** changes learned state and, for an in-grid Unknown environment cell, its simulated terrain classification; it does not rewrite the `.map` file unless the user later saves.
+- **Manual control** cannot interleave with Running/Inspecting steps; an explicitly initiated session from a new pose must synchronize origin and heading.
+- **Completion** is a derived navigation result, not a persisted cell type.
+
+## 10. Implementation sequence
+
+1. **Map and contracts:** Extend terrain schema/codec to Boundary; define Navigator relative coordinates, learned terrain, observation requests/results, and independent action flags.
+2. **Controlled execution:** Wire three-cell forward observation, inspection dialog, Step execution, one-cell movement feedback, and state rendering.
+3. **Autonomy:** Implement deterministic alternating-pass preference, exploration frontier selection, backtracking over known Free cells, completion and blocked detection.
+4. **Product integration:** Continuous execution, Pause, two resets, path/action visualization, edge-case handling, and cross-platform tests.
+
+## 11. Verification and release definition
+
+A release conforming to this PRD must satisfy all acceptance tests, preserve core manual/editor/file functionality, expose Navigator as an independent Rust module, and prohibit hidden simulator-map access by Navigator decision logic. The complete PRD is authoritative; `changelog.md` documents revisions but is not an implementation input.
